@@ -17,6 +17,7 @@ static class Ring
     public const int Particles = 120;
     public const int Fps = 30;           // 球常驻，限 30fps
     public const double OutlineW = 1.8;  // 描边厚度（单侧）
+    public const double DiscAlpha = 0.45; // 内盘半透明度（0=全透，1=不透）
 
     public static readonly Color Rail = Hex("#d3d3ce");
     public static readonly Color Outline = Hex("#9a9a94");   // 描边：比衬环深一档，浮在任意桌面上都看得清

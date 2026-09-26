@@ -480,10 +480,18 @@ public partial class PanelWindow : Window
         if (_lastFrame != 0)
         {
             double dt = (now - _lastFrame) / 1000.0;
-            if (dt >= 1.0 / 30) blob.Advance(Math.Min(dt, 0.1));
+            // 门控没过就直接返回，**不要**更新 _lastFrame：
+            // 否则 60fps 回调下每帧都把基准重置，dt 恒为 ~16ms，条件永远不成立（粒子团就冻住了）
+            if (dt < 1.0 / 30) return;
+            blob.Advance(Math.Min(dt, 0.1));
+            _blobFrames++;
+            if (_blobFrames == 120)      // 大约 4 秒后记一条，用来确认真的在动
+                Diag.Log($"面板：粒子团 4 秒内绘制 {_blobFrames} 帧（≈{_blobFrames / 4.0:F0} fps）");
         }
         _lastFrame = now;
     }
+
+    long _blobFrames;
 
     /* ---- 页1：占用报告开关（隐藏右侧应用概况） ---- */
 

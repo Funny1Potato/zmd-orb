@@ -63,7 +63,8 @@ sealed class BallVisual : FrameworkElement
         _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
         _railPen = Pen(Ring.Outline, Ring.WTrack + 2 * ow);   // 衬底 = 轨道宽 + 两侧描边，形成均匀一圈描边
         _trackPen = Pen(Ring.Track, Ring.WTrack);
-        _discBrush = Freeze(new SolidColorBrush(Ring.Disc));
+        // 中间的盘做成半透明（用户要求）：让壁纸透上来，球看起来更轻
+        _discBrush = Freeze(new SolidColorBrush(Ring.Disc) { Opacity = Ring.DiscAlpha });
 
         var colors = new[] { Ring.ArcLow, Ring.ArcMid, Ring.ArcHigh };
         for (int i = 0; i < 3; i++)
