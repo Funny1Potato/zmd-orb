@@ -179,8 +179,29 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def use_utf8_stdio():
+    """把 stdout/stderr 钉成 UTF-8。
+
+    冻结成 backend.exe 后 stdout 是管道，编码按系统区域取——非中文区域（如 cp1252）编不出
+    中文日志，print 会直接抛 UnicodeEncodeError 把采集端打死（CI 的英文 runner 上实测）。
+    显式 reconfigure 能盖掉 PYTHONIOENCODING 等启动期设置。"""
+    for s in (sys.stdout, sys.stderr):
+        try:
+            if s is not None:
+                s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def log(msg):
-    print(msg, flush=True)
+    """日志绝不允许打死采集端：编不出来就降级成 ASCII 再丢一次。"""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        try:
+            print(str(msg).encode("ascii", "replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
 
 
 def _selftest():
@@ -214,6 +235,7 @@ def _selftest():
 
 
 def main(gui=True, selftest=False):
+    use_utf8_stdio()
     mem = read_memory() or {}
     log("[采集端] 内存 %.1f GB，当前占用 %.1f%%（提交 %.1f/%.1f GB）"
         % ((mem.get("total_mb", 0)) / 1024, mem.get("pct", 0),

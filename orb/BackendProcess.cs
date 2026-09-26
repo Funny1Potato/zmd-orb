@@ -74,6 +74,10 @@ sealed class BackendProcess : IDisposable
                 WorkingDirectory = AppContext.BaseDirectory,
                 RedirectStandardOutput = true,  // 重定向到日志：直接继承句柄的话 python 一 print 就崩
                 RedirectStandardError = true,
+                // 采集端把 stdio 钉成 UTF-8（见 use_utf8_stdio），这里按同一口径解，
+                // 否则中文日志会按系统区域解成乱码
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
             };
             var p = Process.Start(psi);
             if (p == null)
