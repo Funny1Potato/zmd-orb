@@ -1016,15 +1016,20 @@
             </Grid>
           </Border>
 
-          <!-- 图例：两条线的口径不同（已占用对物理内存，已提交对提交额度），写明免得误读 -->
-          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,10,0,0">
-            <Ellipse Width="8" Height="8" Fill="#ded24e" VerticalAlignment="Center"/>
-            <TextBlock Text="已占用（工作集，占物理内存）" FontSize="12"
-                       Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
-            <Ellipse Width="8" Height="8" Fill="{StaticResource Blue}" VerticalAlignment="Center"
-                     Margin="18,0,0,0"/>
-            <TextBlock Text="已提交（提交大小，占提交额度）" FontSize="12"
-                       Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
+          <!-- 图例：两条线的口径不同（已占用对物理内存，已提交对提交额度），并解释为什么有时"提交 < 占用" -->
+          <StackPanel Grid.Row="1" Margin="4,10,0,0">
+            <StackPanel Orientation="Horizontal">
+              <Ellipse Width="8" Height="8" Fill="#ded24e" VerticalAlignment="Center"/>
+              <TextBlock Text="已占用（工作集：驻留物理内存的页，含与其他进程共享的页）" FontSize="12"
+                         Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
+              <Ellipse Width="8" Height="8" Fill="{StaticResource Blue}" VerticalAlignment="Center"
+                       Margin="18,0,0,0"/>
+              <TextBlock Text="已提交（私有提交：含未驻留的页，不含共享页）" FontSize="12"
+                         Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
+            </StackPanel>
+            <TextBlock Margin="0,5,0,0" FontSize="11.5" Foreground="{StaticResource InkDim}"
+                       TextWrapping="Wrap"
+                       Text="两者口径不同，所以个别应用会出现“已提交 &lt; 已占用”：以共享代码/映射文件为主的进程（服务、扫描器等）工作集里大部分是共享页，不计入它的私有提交。"/>
           </StackPanel>
 
           <ListBox x:Name="memList" Grid.Row="2" Margin="0,10,0,0" BorderThickness="0"
