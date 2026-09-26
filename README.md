@@ -2,8 +2,8 @@
 
 常驻悬浮球：一键**整理内存缓存页**，同时能当任务管理器用。环的样式沿用 `zmd-manager`（终末地管理器）的电量环。
 
-> **状态：M0 骨架。** 目前只有：双窗口壳（透明置顶球 + 面板）、采集端的 `/snapshot`、球的电量环与粒子团。
-> 清理逻辑（M1）、面板进程表（M3）、托盘与开机自启（M4）都还没实现。
+> **状态：M1 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
+> **三级整理真生效**（含按需 UAC、前后测量、节流、排除名单）。面板进程表在 M3，托盘与开机自启在 M4。
 
 ## 它做什么、不做什么
 
@@ -12,11 +12,31 @@ Windows 上没有"释放内存"的魔法。所谓加速球做的是两件事：�
 
 因此本工具的显示口径刻意保守：
 
-- 文案用"**整理 X GB 缓存页**"，不写"释放内存"
-- 同时显示代价：**硬缺页率**（`\Memory\Pages Input/sec`）、**页文件使用率**、**提交压力**
-  （提交额度才是真会把程序打崩的东西，物理内存百分比看不出这个）
-- 自动整理盯 **free + zero page list**，而不是 `available`——`available` 把待命列表算作可用，
-  清空待命列表后它上升，但内存并没有变多
+- 文案用"**整理 X GB 缓存页**"或"**换出 X GB 工作集**"，不写"释放内存"；轻度档还会明说"free+zero 没变"
+- 面板同时给出 **空闲 + 零页（free+zero）** 与 **待命列表**，而不是只看 `available`
+  ——`available` 把待命列表算作可用，清空它以后 `available` 几乎不动，而 free+zero 会上去
+- 真会打崩程序的是**提交额度**（`commit_limit` 与本机页面文件大小绑定），所以它单独占一张卡
+
+### 三级整理（档位单调：深度包含轻度）
+
+| 档 | 做什么 | 提权 | 效果（本机实测） |
+|---|---|---|---|
+| **l1 轻度** | 清本用户进程的工作集 | 免提权 | 198 个进程 → 换出 1~5 GB 工作集（进待命/已修改列表），占用率 63%→53%，**free+zero 不变** |
+| **l2 深度** | l1 + 刷已修改页 + **清待命列表** | 需管理员（弹 UAC） | 待命列表能掉几 GB（本机常态 8~13 GB），free+zero 相应上升 |
+| **l3 全部** | l2 的全系统版：全系统清工作集 + 清系统文件缓存 + 清低优先级待命 | 需管理员（弹 UAC） | 最狠，硬缺页代价也最大 |
+
+单击球 = **l1**（免提权、不弹 UAC，1.3 秒内完成）；两个重档在面板上，点了才弹一次 UAC。
+
+实测的特权边界（2026-09-26 逐条核过，避免"以为要管理员"或"以为不要"）：
+
+- **免提权就能成功**：`K32EmptyWorkingSet`（本用户 214 个进程里能打开 194 个）、
+  `NtSetSystemInformation(0x50, 3)` 刷已修改页
+- **必须管理员**：`(0x50, 4/5)` 清待命、`(0x50, 2)` 全系统清工作集、`SetSystemFileCacheSize`
+  （无提权时前者返回 `0xC0000061 STATUS_PRIVILEGE_NOT_HELD`，后者返回 0 且 `GetLastError()=5`）
+
+排除名单：默认不动球自己、采集端、关键系统进程，并且**不清当前前台进程**（正在用的程序被清工作集会有可见卡顿）。
+想加就写 `%LOCALAPPDATA%\zmd-orb\exclude.txt`（或程序同目录 `exclude.txt`）：
+每行一个进程名，`#` 注释，`!名字` 表示从默认名单里去掉，`foreground_exclude=0` 关掉前台保护。
 
 ## 为什么壳是 WPF（而不是 Web 壳）
 
@@ -43,6 +63,23 @@ WPF 的 `AllowsTransparency` 走的是**分层窗口**（ARGB DIB + DWM 合成�
 | 设计参考 | `frontend/`：最初那套 HTML/SVG/Canvas 实现，**不再参与运行时**；`dev.html` 在浏览器里模拟透明底预览环的配色，调色时比反复编译省事 |
 
 本地 API 端口用 **8910**，避开 zmd-manager 的 8899，两个工具可以同时开。
+
+对外接口：
+
+```
+GET  /snapshot        内存/CPU 快照（含 free_zero_mb / standby_mb / modified_mb / admin）
+GET  /health          健康检查（壳启动前探活用）
+POST /clean?tier=l1   l2 / l3 整理一次；返回 summary/detail/before/after/delta/timing
+GET  /clean/result    最近一次整理的结果（面板打开时回填）
+GET  /dev.html        设计参考页（调色用）
+```
+
+手工测（`force=1` 跳过 30 秒节流）：
+
+```
+curl -X POST "http://127.0.0.1:8910/clean?tier=l1&force=1"
+python collector/speed_collector.py --clean-now l2      # 提权 helper 的入口，只整理一次不占端口
+```
 
 ## 构建
 
@@ -79,9 +116,9 @@ CI（`.github/workflows/build.yml`）把上面这套跑一遍，产出 `zmd-orb-
 
 ```
 orb/                             WPF 壳（.NET 6）
-  BallWindow.xaml(.cs)           球窗口：取数、整理动画、拖拽/单击、悬停
+  BallWindow.xaml(.cs)           球窗口：取数、单击跑轻度整理、拖拽/双击/右键、悬停
   BallVisual.cs                  电量环 + 中心粒子团（直绘，参数对应 ring.js）
-  PanelWindow.xaml(.cs)          任务管理器面板（M3 加进程表）
+  PanelWindow.xaml(.cs)          面板：三档整理 + 六张读数卡（M3 加进程表）
   Ring.cs                        环的几何与配色常量
   MemoryApi.cs / BackendProcess.cs / Win32.cs / Diag.cs
 collector/speed_collector.py    本地采集/清理服务（psutil + ctypes）
@@ -100,3 +137,13 @@ make_icon.py                    生成 orb/icon.ico
 - **采集端孤儿**：壳被强杀时 python 采集端会留下来占着 8910。壳启动前先探一次 `/health`，
   是我们的采集端就直接复用，不重复拉起。
 - **面板窗口不透明**：面板不需要透明层，走硬件加速，文字更清晰。
+- **别用 psutil 枚举进程**：`process_iter(["pid","name"])` 在本机要 **2114ms**（它每个进程都得
+  `OpenProcess` 取名字），比"清工作集"本身（175ms）还慢十倍，于是单击一次要 3.3 秒。
+  改用 `NtQuerySystemInformation(SystemProcessInformation)` 一次拿全 404 个进程只要 **16.7ms**（快 127 倍），
+  单击总耗时降到 1.3 秒。psutil 仍留着做 CPU/启动时间等核对，枚举失败时才回退它。
+- **`SYSTEM_MEMORY_LIST_INFORMATION` 要比 phnt 长**：本机实测 OS 要 **176 字节**（22 个 ULONG_PTR），
+  按 phnt 的 15 字段（120 字节）申请会拿到 `0xC0000004 STATUS_INFO_LENGTH_MISMATCH`，字段一个都不填。
+  前 13 个字段与 WMI 的 `Win32_PerfFormattedData_PerfOS_Memory` 逐条对得上（待命合计差 <2MB），
+  尾部 7 个字段含义不明且按页换算会超过物理内存，一律不用。
+- **`FlushModifiedList` 免提权就能成功**（实测 `0x00000000`），而清待命/全系统清工作集/清文件缓存都要管理员
+  ——别以为"系统级操作必然都要提权"。

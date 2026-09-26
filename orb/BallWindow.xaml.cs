@@ -15,16 +15,18 @@ namespace ZmdOrb;
 /// </summary>
 public partial class BallWindow : Window
 {
-    const double CooldownMs = 30000;    // 冷却 30s
+    const double CooldownMs = 30000;    // 冷却 30s（与采集端的 THROTTLE 保持一致）
     const double DragThreshold = 4;     // 位移超过 4px 算拖拽，否则算单击
-    const double CleanMs = 900, PulseMs = 700;
+    const double SweepMs = 600, SettleMs = 520;
+    const double DegradeHintMb = 2048;  // 待命列表超过这个量就提示"面板里可深度整理"
+    const string Tier = "l1";           // 单击只跑轻度：免提权、不弹 UAC
 
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
     readonly Brush _warn = new SolidColorBrush(Ring.Hex("#c2703a"));
 
     // 取数状态
     bool _live;
-    double _memPct, _availMb, _commitPct, _cacheMb;
+    double _memPct, _availMb, _commitPct, _cacheMb, _freeZeroMb, _standbyMb;
     double _demoPct = 62;
     bool _polling;
 
@@ -43,7 +45,8 @@ public partial class BallWindow : Window
 
     sealed class CleanAnim
     {
-        public double From, Target, FreedGb;
+        public bool Settling;          // false = 向上扫（等采集端结果）；true = 落回真实新值
+        public double From, Target;
         public TimeSpan T0;
     }
 
@@ -92,6 +95,8 @@ public partial class BallWindow : Window
                 _availMb = s.AvailMb;
                 _commitPct = s.CommitPct;
                 _cacheMb = s.SystemCacheMb;
+                _freeZeroMb = s.FreeZeroMb;
+                _standbyMb = s.StandbyMb;
             }
             else
             {
@@ -101,6 +106,8 @@ public partial class BallWindow : Window
                 _availMb = (32 - 32 * _memPct / 100) * 1024;
                 _commitPct = 0;
                 _cacheMb = 0;
+                _freeZeroMb = 0;
+                _standbyMb = 0;
             }
             if (!_busy) Render();
         }
@@ -149,12 +156,15 @@ public partial class BallWindow : Window
             _fpsMark = _now;
         }
 
-        if (_anim != null) StepClean();
+        if (_anim != null) StepAnim();
     }
 
-    /* ---------------- 单击：整理动画（M0 演示） ---------------- */
+    /* ---------------- 单击：真的整理（M1，轻度档） ---------------- */
 
-    void DoClean()
+    string _pendingFloat = "";
+    string? _pendingHint;
+
+    async void DoClean()
     {
         if (_busy) return;
         long now = Environment.TickCount64;
@@ -163,57 +173,87 @@ public partial class BallWindow : Window
             ShowFloat("冷却中 " + (long)Math.Ceiling((CooldownMs - (now - _lastCleanTick)) / 1000.0) + "s");
             return;
         }
-        _lastCleanTick = now;
+        _lastCleanTick = now;              // 先占住冷却：请求在飞的时候再点不该重入
         _busy = true;
         ScaleTo(1.09, 120);
+        _anim = new CleanAnim { From = _memPct, T0 = _now };   // 环向上扫，等采集端结果
+        Diag.Log($"球被点击 → 轻度整理（tier={Tier}）");
 
-        double from = _memPct;
-        // 结果文案刻意写"整理 N GB 缓存页"而不是"释放内存"：待命列表被清掉后系统还会按需缓存回来
+        CleanResult res;
+        try { res = await MemoryApi.CleanAsync(Tier); }
+        catch (Exception ex) { res = new CleanResult { Ok = false, Error = ex.Message }; }
+
+        double? retry = res.RetryAfter;
+        if (!res.Ok)
+        {
+            if (retry == null) _lastCleanTick = 0;      // 连接类失败不占冷却，用户可以立刻再点
+            ResetAnim(retry != null ? "冷却中 " + (long)Math.Ceiling(retry.Value) + "s"
+                                    : (string.IsNullOrEmpty(res.Error) ? "整理失败" : res.Error));
+            return;
+        }
+
+        if (!double.IsNaN(res.PctAfter))
+        {
+            _memPct = res.PctAfter;
+            _standbyMb = res.StandbyAfterMb;
+            _freeZeroMb = res.FreeZeroAfterMb;
+        }
         _anim = new CleanAnim
         {
-            From = from,
-            Target = Math.Max(8, from - (6 + Random.Shared.NextDouble() * 10)),
-            FreedGb = _live && _cacheMb > 0 ? _cacheMb * 0.35 / 1024 : 0.8 + Random.Shared.NextDouble() * 1.6,
+            Settling = true,
+            Target = double.IsNaN(res.PctAfter) ? _memPct : res.PctAfter,
             T0 = _now,
         };
-        Diag.Log($"球被点击 → 整理动画（M0 演示）from={from:F1}%");
+        _pendingFloat = BallLine(res);
+        _pendingHint = res.StandbyAfterMb > DegradeHintMb
+            ? "待命 " + (res.StandbyAfterMb / 1024).ToString("F1") + "G，可深度整理"
+            : null;
+        Diag.Log($"整理完成 {res.Tier}：{res.Summary}｜{res.Detail}");
     }
 
-    void StepClean()
+    /// <summary>球上的短文案。球窗口只有 160px 宽，长文案会被裁掉，明细留给面板。</summary>
+    static string BallLine(CleanResult r) => r.Tier == "l1"
+        ? "换出 " + r.MovedGb.ToString("F1") + "G 工作集"
+        : "整理 " + r.PurgedGb.ToString("F1") + "G 缓存页";
+
+    void ResetAnim(string text)
+    {
+        _anim = null;
+        _busy = false;
+        Visual.SetBreathe(1, 1);
+        Render();
+        ScaleTo(_hover ? 1.05 : 1, 160);
+        ShowFloat(text);
+    }
+
+    void StepAnim()
     {
         var a = _anim!;
-        double k = (_now - a.T0).TotalMilliseconds / CleanMs;
+        if (!a.Settling)
+        {
+            // 向上扫到 100 后停住等结果（深度档可能要等用户点 UAC，会停得久一些）
+            double k = Math.Min(1.0, (_now - a.T0).TotalMilliseconds / SweepMs);
+            Visual.Pct = a.From + (100 - a.From) * k;
+            PctNum.Text = Math.Round(Visual.Pct).ToString();
+            Visual.SetBreathe(0.78, 0.5);         // 被"吸住"的观感
+            return;
+        }
 
-        if (k >= 1)
+        double k2 = (_now - a.T0).TotalMilliseconds / SettleMs;
+        if (k2 >= 1)
         {
             _anim = null;
             _busy = false;
             Visual.SetBreathe(1, 1);
-            Render();                                   // 落回真实占用
+            Render();                              // 落回真实占用（真实值已在 DoClean 里更新过）
             ScaleTo(_hover ? 1.05 : 1, 160);
-            ShowFloat("演示：整理 " + a.FreedGb.ToString("F1") + " GB 缓存页");
+            ShowFloat(_pendingFloat, _pendingHint);
             return;
         }
-
-        double p;
-        if (k < 0.45) p = a.From + (100 - a.From) * (k / 0.45);
-        else
-        {
-            double u = (k - 0.45) / 0.55, ease = 1 - Math.Pow(1 - u, 3);
-            p = 100 + (a.Target - 100) * ease;
-        }
-        Visual.Pct = p;
-        PctNum.Text = Math.Round(p).ToString();
-
-        double pk = k * CleanMs / PulseMs;              // 粒子团"吸一下再回弹"
-        if (pk < 1)
-        {
-            double sq, am;
-            if (pk < 0.45) { double u = pk / 0.45; sq = 1 - 0.26 * u; am = 1 - 0.5 * u; }
-            else { double u = (pk - 0.45) / 0.55; sq = 1 + 0.10 * Math.Sin(u * Math.PI) - 0.26 * (1 - u); am = 0.5 + 0.5 * u; }
-            Visual.SetBreathe(sq, am);
-        }
-        else Visual.SetBreathe(1, 1);
+        double e = 1 - Math.Pow(1 - k2, 3);
+        Visual.Pct = 100 + (a.Target - 100) * e;
+        PctNum.Text = Math.Round(Visual.Pct).ToString();
+        Visual.SetBreathe(1, 1);
     }
 
     /* ---------------- 悬停 / 缩放 ---------------- */
@@ -306,22 +346,34 @@ public partial class BallWindow : Window
 
     /* ---------------- 浮字提示 ---------------- */
 
-    void ShowFloat(string text)
+    void ShowFloat(string text, string? hint = null)
     {
         FloatText.Text = text;
+        if (!string.IsNullOrEmpty(hint))
+        {
+            FloatHint.Text = hint;
+            FloatHint.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            FloatHint.Visibility = Visibility.Collapsed;
+        }
         FloatShift.BeginAnimation(TranslateTransform.YProperty, null);
         FloatShift.Y = 4;
-        FloatText.BeginAnimation(OpacityProperty,
+        FloatBox.BeginAnimation(OpacityProperty,
             new DoubleAnimation(1, TimeSpan.FromMilliseconds(250)));
         FloatShift.BeginAnimation(TranslateTransform.YProperty,
             new DoubleAnimation(-10, TimeSpan.FromMilliseconds(450))
             { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
 
-        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1700) };
+        var t = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(string.IsNullOrEmpty(hint) ? 1700 : 2600),
+        };
         t.Tick += (_, _) =>
         {
             t.Stop();
-            FloatText.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
+            FloatBox.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
             FloatShift.BeginAnimation(TranslateTransform.YProperty, null);
             FloatShift.Y = 4;
         };

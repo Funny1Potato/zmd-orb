@@ -43,6 +43,33 @@
       </Setter>
     </Style>
 
+    <Style x:Key="ActBtn" TargetType="Button">
+      <Setter Property="Height" Value="32"/>
+      <Setter Property="Padding" Value="14,0"/>
+      <Setter Property="FontSize" Value="12.5"/>
+      <Setter Property="Foreground" Value="#3f3f3a"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bg" Background="#ffffff" BorderBrush="#dcdcd6" BorderThickness="1"
+                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#f6f6f2"/>
+                <Setter TargetName="bg" Property="BorderBrush" Value="#c6c6bf"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bg" Property="Opacity" Value="0.45"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="CardKey" TargetType="TextBlock">
       <Setter Property="FontSize" Value="11"/>
       <Setter Property="Foreground" Value="#8b8b84"/>
@@ -80,7 +107,21 @@
 
       <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="16">
-          <UniformGrid Columns="4">
+
+          <!-- 三个档位：轻度免提权；深度/全部要管理员，点了才会弹一次 UAC -->
+          <StackPanel Orientation="Horizontal">
+            <Button x:Name="BtnL1" Content="轻度整理" Style="{StaticResource ActBtn}" Click="CleanL1_Click"/>
+            <Button x:Name="BtnL2" Content="深度整理" Style="{StaticResource ActBtn}" Margin="8,0,0,0"
+                    Click="CleanL2_Click"/>
+            <Button x:Name="BtnL3" Content="全部整理" Style="{StaticResource ActBtn}" Margin="8,0,0,0"
+                    Click="CleanL3_Click"/>
+            <TextBlock x:Name="adminHint" VerticalAlignment="Center" Margin="12,0,0,0" FontSize="11.5"
+                       Foreground="#8b8b84"/>
+          </StackPanel>
+          <TextBlock x:Name="statusLine" Margin="2,10,0,0" FontSize="12" Foreground="#6a6a64"
+                     TextWrapping="Wrap" LineHeight="19"/>
+
+          <UniformGrid Columns="3" Margin="0,10,0,0">
             <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
                     Margin="5" Padding="14,12">
               <StackPanel>
@@ -91,8 +132,22 @@
             <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
                     Margin="5" Padding="14,12">
               <StackPanel>
-                <TextBlock Text="可用内存" Style="{StaticResource CardKey}"/>
+                <TextBlock Text="可用内存（含待命）" Style="{StaticResource CardKey}"/>
                 <TextBlock x:Name="cAvail" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="空闲 + 零页（真判据）" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cFreeZero" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="待命列表（缓存页）" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cStandby" Text="—" Style="{StaticResource CardVal}"/>
               </StackPanel>
             </Border>
             <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
@@ -112,17 +167,21 @@
           </UniformGrid>
 
           <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
-                  Margin="5,18,5,5" Padding="16,14">
+                  Margin="5,14,5,5" Padding="16,14">
             <StackPanel>
-              <TextBlock Text="M0 骨架" FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"/>
-              <TextBlock Margin="0,8,0,0" FontSize="12.5" TextWrapping="Wrap" Foreground="#4a4a46"
-                         LineHeight="20">
-                这里现在是空壳。按计划：<Run FontWeight="SemiBold">M3</Run> 加进程表（按 CPU/内存排序、搜索、结束进程），
-                <Run FontWeight="SemiBold">M1</Run> 让"整理缓存页"真的生效（三级档位 + 前后测量），
-                <Run FontWeight="SemiBold">M4</Run> 接托盘与开机自启。
+              <TextBlock Text="口径与进度" FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"/>
+              <TextBlock x:Name="lastResult" Margin="0,8,0,0" FontSize="12.5" Foreground="#4a4a46"
+                         TextWrapping="Wrap" LineHeight="20" Text="还没整理过。"/>
+              <TextBlock Margin="0,10,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
+                         LineHeight="19">
+                <Run Text="“搬走”不等于“腾出”：清掉的工作集/缓存页会在下次访问时从 pagefile 硬缺页读回，"/>
+                <Run Text="available 把待命列表算作可用，清完它几乎不动——要看效果请看“空闲 + 零页”。"/>
               </TextBlock>
-              <TextBlock x:Name="stateLine" Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84"
-                         TextWrapping="Wrap"/>
+              <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
+                         LineHeight="19">
+                <Run Text="M1 已完成（三级整理真生效、按需 UAC、前后测量、节流与排除名单）。"/>
+                <Run Text="进程表（可结束进程）在 M3，托盘与开机自启在 M4。"/>
+              </TextBlock>
             </StackPanel>
           </Border>
         </StackPanel>

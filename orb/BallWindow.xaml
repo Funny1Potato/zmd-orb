@@ -32,12 +32,17 @@
                  LineHeight="12" LineStackingStrategy="BlockLineHeight"/>
     </StackPanel>
 
-    <TextBlock x:Name="FloatText" VerticalAlignment="Top" HorizontalAlignment="Center"
-               Margin="0,26,0,0" FontSize="11" FontWeight="SemiBold" Foreground="#8a7a2a"
-               Opacity="0" IsHitTestVisible="False">
-      <TextBlock.RenderTransform>
+    <StackPanel x:Name="FloatBox" VerticalAlignment="Top" HorizontalAlignment="Center"
+                Margin="0,22,0,0" Opacity="0" IsHitTestVisible="False">
+      <StackPanel.RenderTransform>
         <TranslateTransform x:Name="FloatShift" Y="4"/>
-      </TextBlock.RenderTransform>
-    </TextBlock>
+      </StackPanel.RenderTransform>
+      <TextBlock x:Name="FloatText" HorizontalAlignment="Center" FontSize="11" FontWeight="SemiBold"
+                 Foreground="#8a7a2a" TextAlignment="Center" LineHeight="13"
+                 LineStackingStrategy="BlockLineHeight"/>
+      <TextBlock x:Name="FloatHint" HorizontalAlignment="Center" FontSize="10" Margin="0,2,0,0"
+                 Foreground="#a4893f" TextAlignment="Center" LineHeight="12"
+                 LineStackingStrategy="BlockLineHeight" Visibility="Collapsed"/>
+    </StackPanel>
   </Grid>
 </Window>
