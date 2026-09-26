@@ -433,8 +433,21 @@ class SYSTEM_PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
-def enumerate_processes():
-    """[(pid, 小写进程名)]。失败返回空列表，调用方回退 psutil。"""
+# 已用 psutil 逐条对出来的字段偏移（base = 记录起始地址，x64）：
+#   4   NumberOfThreads(u32)      40  UserTime(i64, 100ns)     48  KernelTime(i64, 100ns)
+#   56  ImageName(UNICODE_STRING) 80  UniqueProcessId(vp)      88  InheritedFromUniqueProcessId(vp)
+#   144 WorkingSetSize（字节；u64 与 u32 读出来一样，取 u64 并对"大于物理内存"做回绕兜底）
+# 其余字段（内存列表那种"猜结构体"的坑）不声明、不读。
+OFF_THREADS, OFF_USER, OFF_KERN = 4, 40, 48
+OFF_IMG, OFF_PID, OFF_PPID, OFF_WS = 56, 80, 88, 144
+
+
+def enumerate_processes(phys_bytes=0):
+    """一次系统调用拿全：[{pid,name,ppid,threads,user,kern,ws}]。
+
+    实测（2026-09-26）：403 个进程约 17ms。而 psutil.process_iter(["pid","name"])
+    要 2114ms（它每个进程都得 OpenProcess 取名字），比"清工作集"本身还慢十倍。
+    """
     size = 512 * 1024
     for _ in range(6):
         buf = ctypes.create_string_buffer(size)
@@ -446,20 +459,29 @@ def enumerate_processes():
             continue
         if status < 0:
             return []
-        out = []
-        off = 0
+        out, off = [], 0
         while True:
-            p = ctypes.cast(ctypes.byref(buf, off),
-                            ctypes.POINTER(SYSTEM_PROCESS_INFORMATION)).contents
-            pid = int(p.UniqueProcessId or 0)
+            base = ctypes.addressof(buf) + off
+            nxt = ctypes.c_ulong.from_address(base).value
+            pid = ctypes.c_void_p.from_address(base + OFF_PID).value or 0
             if pid:
-                name = ""
-                if p.ImageName.Buffer and p.ImageName.Length:
-                    name = ctypes.wstring_at(p.ImageName.Buffer, p.ImageName.Length // 2).lower()
-                out.append((pid, name))
-            if not p.NextEntryOffset:
+                img_len = ctypes.c_ushort.from_address(base + OFF_IMG).value
+                img_buf = ctypes.c_void_p.from_address(base + OFF_IMG + 8).value
+                name = ctypes.wstring_at(img_buf, img_len // 2).lower() if (img_buf and img_len) else ""
+                ws = int.from_bytes(ctypes.string_at(base + OFF_WS, 8), "little")
+                if phys_bytes and ws > phys_bytes:       # 内核字段若是 u32，>4GB 会回绕
+                    ws = int.from_bytes(ctypes.string_at(base + OFF_WS, 4), "little")
+                out.append({
+                    "pid": pid, "name": name,
+                    "ppid": ctypes.c_void_p.from_address(base + OFF_PPID).value or 0,
+                    "threads": ctypes.c_ulong.from_address(base + OFF_THREADS).value,
+                    "user": ctypes.c_longlong.from_address(base + OFF_USER).value,
+                    "kern": ctypes.c_longlong.from_address(base + OFF_KERN).value,
+                    "ws": ws,
+                })
+            if not nxt:
                 break
-            off += p.NextEntryOffset
+            off += nxt
         return out
     return []
 
@@ -475,11 +497,12 @@ def empty_working_sets(exclude, skip_fg=True):
     if not procs:                                  # 枚举失败才退回 psutil（慢但能用）
         for p in psutil.process_iter(["pid", "name"]):
             try:
-                procs.append((p.info["pid"], (p.info.get("name") or "").lower()))
+                procs.append({"pid": p.info["pid"], "name": (p.info.get("name") or "").lower()})
             except Exception:
                 pass
     done = skipped = failed = 0
-    for pid, name in procs:
+    for p in procs:
+        pid, name = p["pid"], p["name"]
         if not name or name in exclude or (fg and name == fg):
             skipped += 1
             continue
@@ -715,8 +738,25 @@ ERROR_CANCELLED = 1223
 
 
 def run_elevated(tier):
-    """按需提权：用 runas 把采集端自己再拉一份，做完把结果写进临时文件再退出。"""
-    out = os.path.join(tempfile.gettempdir(), "zmd_orb_clean_%d.json" % os.getpid())
+    """按需提权做一次整理（helper 模式：--clean-now）。"""
+    res = launch_elevated("--clean-now %s" % tier, "整理 " + tier)
+    res.setdefault("tier", tier)
+    state["last_result"] = res
+    if res.get("ok"):
+        state["last_clean"] = time.time()
+    return res
+
+
+def launch_elevated(helper_args, label):
+    """用 runas 把采集端自己再拉一份，做完把结果（helper 写的 JSON）取回来。
+
+    只负责"拉起 + 等 + 取结果 + 记日志"，状态由调用方写——免得整理和结束进程互相污染状态。
+
+    用 ShellExecuteExW 而不是 ShellExecuteW：带上 SEE_MASK_NOCLOSEPROCESS 能拿到提权进程句柄，
+    于是"helper 一起来就崩 / 参数不认识直接退出"能立刻按退出码报出来，而不是干等超时
+    （2026-09-26 踩过：命令行多了一个 argparse 不认识的 --force，白等 90 秒）。
+    """
+    out = os.path.join(tempfile.gettempdir(), "zmd_orb_helper_%d.json" % os.getpid())
     try:
         if os.path.exists(out):
             os.remove(out)
@@ -724,10 +764,10 @@ def run_elevated(tier):
         pass
 
     if getattr(sys, "frozen", False):
-        exe, params = sys.executable, '--clean-now %s --out "%s"' % (tier, out)
+        exe, params = sys.executable, '%s --out "%s"' % (helper_args, out)
     else:
         exe = sys.executable
-        params = '"%s" --clean-now %s --out "%s"' % (os.path.abspath(__file__), tier, out)
+        params = '"%s" %s --out "%s"' % (os.path.abspath(__file__), helper_args, out)
     log("[清理端] 提权拉起：%s %s" % (exe, params))
 
     sei = SHELLEXECUTEINFOW()
@@ -743,55 +783,44 @@ def run_elevated(tier):
     if not ok:
         err = _k32.GetLastError()
         msg = "你取消了管理员授权" if err == ERROR_CANCELLED else "提权失败（GetLastError=%d）" % err
-        log("[清理端] %s 未执行：%s" % (tier, msg))
-        res = {"ok": False, "tier": tier, "error": msg, "need_admin": True, "ts": time.time()}
-        state["last_result"] = res
-        return res
+        log("[清理端] %s 未执行：%s" % (label, msg))
+        return {"ok": False, "error": msg, "need_admin": True, "ts": time.time()}
 
     proc = sei.hProcess
     try:
         deadline = time.time() + ELEVATE_WAIT
         while time.time() < deadline:
             if os.path.exists(out):
-                return _read_helper_result(tier, out)
+                return _read_helper_result(label, out)
             # 每次等 300ms：既能及时发现进程退出，也不至于空转
             if proc and _k32.WaitForSingleObject(proc, 300) == WAIT_OBJECT_0:
                 if os.path.exists(out):
-                    return _read_helper_result(tier, out)
+                    return _read_helper_result(label, out)
                 code = ctypes.c_ulong(0)
                 _k32.GetExitCodeProcess(proc, ctypes.byref(code))
                 msg = ("提权 helper 直接退出了（退出码 %d）且没写出结果；"
                        "多半是命令行参数有问题，看壳日志里那行'提权拉起'" % code.value)
-                log("[清理端] %s 失败：%s" % (tier, msg))
-                res = {"ok": False, "tier": tier, "error": msg, "need_admin": True,
-                       "ts": time.time()}
-                state["last_result"] = res
-                return res
+                log("[清理端] %s 失败：%s" % (label, msg))
+                return {"ok": False, "error": msg, "need_admin": True, "ts": time.time()}
     finally:
         if proc:
             _k32.CloseHandle(proc)
 
-    res = {"ok": False, "tier": tier, "need_admin": True,
-           "error": "提权后的整理超时（等了 %d 秒）" % ELEVATE_WAIT}
-    log("[清理端] %s 失败：%s" % (tier, res["error"]))
-    state["last_result"] = res
-    return res
+    log("[清理端] %s 失败：提权后的操作超时（等了 %d 秒）" % (label, ELEVATE_WAIT))
+    return {"ok": False, "error": "提权后的操作超时（等了 %d 秒）" % ELEVATE_WAIT, "need_admin": True}
 
 
-def _read_helper_result(tier, out):
+def _read_helper_result(label, out):
     try:
         with open(out, encoding="utf-8") as f:
             res = json.load(f)
     except Exception as e:
-        res = {"ok": False, "tier": tier, "error": "读不到提权结果：%s" % e}
+        res = {"ok": False, "error": "读不到提权结果：%s" % e}
     try:
         os.remove(out)
     except OSError:
         pass
-    if res.get("ok"):
-        state["last_clean"] = time.time()
-    state["last_result"] = res
-    log("[清理端] 提权完成 %s" % (res.get("summary") or res.get("error", "")))
+    log("[清理端] %s 完成：%s" % (label, res.get("summary") or res.get("error") or res))
     return res
 
 
@@ -857,6 +886,132 @@ def do_clean(tier="l1", force=False):
         return res
     finally:
         state["cleaning"] = False
+
+
+# ---------------- 进程表与结束进程（M3） ----------------
+PROCESS_TERMINATE = 0x0001
+ERROR_ACCESS_DENIED = 5
+
+# 拦住这些：杀它们的后果不是"某个程序关掉"，而是整个系统完蛋
+KILL_GUARD = {
+    "system", "registry", "memory compression", "memcompression", "idle", "secure system",
+    "smss.exe", "csrss.exe", "wininit.exe", "services.exe", "lsass.exe", "winlogon.exe",
+    "fontdrvhost.exe",
+}
+_pcpu = {"ts": 0.0, "by_pid": {}}     # 上一次的 CPU 时间快照（算 CPU% 要两次采样）
+
+
+def list_processes():
+    """进程表：[{pid,name,ppid,threads,mem_mb,cpu,guarded}]，按内存倒序。
+
+    CPU% 用"上一次调用到这一次"的 CPU 时间差算，所以**第一次调用全是 0**
+    （Task Manager 第一次打开也是这样）。名字/内存/时间都来自一次 NtQuery，约 17ms。
+    """
+    now = time.perf_counter()
+    procs = enumerate_processes(phys_bytes=state.get("phys_bytes", 0))
+    prev = _pcpu["by_pid"]
+    dt = now - _pcpu["ts"] if _pcpu["ts"] else 0.0
+    ncpu = psutil.cpu_count(logical=True) or 1
+    rows = []
+    for p in procs:
+        cpu = 0.0
+        if dt > 0.2 and p["pid"] in prev:
+            d = (p["user"] + p["kern"]) - prev[p["pid"]]
+            cpu = max(0.0, d / 1e7 / dt / ncpu * 100.0)      # 100ns → 秒，再按逻辑核数归一
+        rows.append({
+            "pid": p["pid"], "name": p["name"], "ppid": p["ppid"],
+            "threads": p["threads"], "mem_mb": round(p["ws"] / MB, 1), "cpu": round(cpu, 1),
+            "guarded": p["name"] in KILL_GUARD or p["pid"] <= 4,
+        })
+    _pcpu["ts"] = now
+    _pcpu["by_pid"] = {p["pid"]: p["user"] + p["kern"] for p in procs}
+    rows.sort(key=lambda r: -r["mem_mb"])
+    return rows, round(dt, 2)
+
+
+def _ancestors(pid, by_pid):
+    seen, cur = set(), pid
+    while cur and cur not in seen:
+        seen.add(cur)
+        cur = by_pid.get(cur, {}).get("ppid", 0)
+    return seen
+
+
+def kill_one(pid):
+    """结束一个进程。返回 (是否成功, 失败原因/错误码)。"""
+    _k32.SetLastError(0)
+    h = _k32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not h:
+        err = _k32.GetLastError()
+        return False, err
+    try:
+        if _k32.TerminateProcess(h, 1):
+            return True, 0
+        return False, _k32.GetLastError()
+    finally:
+        _k32.CloseHandle(h)
+
+
+def _kill_local(pid, tree, procs):
+    by_pid = {p["pid"]: p for p in procs}
+    t = by_pid.get(pid)
+    if t is None:
+        return {"ok": False, "pid": pid, "error": "pid %d 已经不存在了" % pid}
+    if t["pid"] <= 4 or t["name"] in KILL_GUARD:
+        return {"ok": False, "pid": pid, "name": t["name"],
+                "error": "%s（pid %d）是内核/关键进程，不动它" % (t["name"] or "?", pid)}
+    protect = _ancestors(os.getpid(), by_pid)          # 采集端自己 + 壳（父进程链）
+    if pid in protect:
+        return {"ok": False, "pid": pid, "name": t["name"],
+                "error": "那是本工具自己的进程（要退出请用面板右上角的 ✕）"}
+
+    targets = [pid]
+    if tree:                                           # 子孙先死，父后死
+        kids = {}
+        for p in procs:
+            kids.setdefault(p["ppid"], []).append(p["pid"])
+        stack, order = [pid], []
+        while stack:
+            cur = stack.pop()
+            order.append(cur)
+            stack.extend(kids.get(cur, []))
+        targets = list(reversed(order))
+    targets = [p for p in targets if p not in protect]
+
+    killed, failed = [], []
+    for p in targets:
+        ok, err = kill_one(p)
+        if ok:
+            killed.append(p)
+        else:
+            failed.append({"pid": p, "err": err})
+    res = {"ok": pid in killed, "pid": pid, "name": t["name"], "tree": bool(tree),
+           "killed": killed, "failed": failed}
+    if res["ok"]:
+        res["summary"] = "已结束 %s（pid %d）%s" % (
+            t["name"], pid, "，连 %d 个子孙进程" % (len(killed) - 1) if tree and len(killed) > 1 else "")
+    else:
+        first = failed[0] if failed else {"err": 0}
+        res["error"] = ("没能结束 %s（pid %d）：%s" % (
+            t["name"], pid,
+            "权限不足（需要管理员）" if first["err"] == ERROR_ACCESS_DENIED
+            else "错误码 %d" % first["err"]))
+        res["denied"] = first["err"] == ERROR_ACCESS_DENIED
+    return res
+
+
+def kill_process(pid, tree=False):
+    """结束进程；被拒绝且非管理员时，按需提权再试一次（与清理用同一套 helper 机制）。"""
+    procs = enumerate_processes()
+    res = _kill_local(pid, tree, procs)
+    if res.get("ok") or not res.get("denied") or is_admin():
+        log("[清理端] 结束进程 %s → %s" % (pid, res.get("summary") or res.get("error")))
+        return res
+
+    log("[清理端] 结束 %s 权限不足，改为提权重试" % pid)
+    ev = launch_elevated("--kill-now %d%s" % (pid, " --tree" if tree else ""), "结束 %s" % pid)
+    state["kill_result"] = ev
+    return ev
 
 
 # ---------------- 自动整理（M2） ----------------
@@ -969,10 +1124,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # 不给 Access-Control-Allow-Origin：本工具没有跨源的前端（dev.html 也是采集端自己伺服的），
+        # 敞开 CORS 只会让任意网页能读取本机 API 的返回。
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    SHELL_TOKEN = "zmd-orb-shell"
+
+    def _need_token(self, what):
+        """写操作（整理/结束进程/开关）要求带 X-Zmd-Orb 头。
+
+        这挡的是"网页里的脚本偷偷 POST 到本机 API"：带自定义头的跨源请求会先发预检，
+        而采集端不答预检，浏览器就拦下了。本机的原生程序（壳、curl）照旧能调。
+        """
+        if self.headers.get("X-Zmd-Orb") == self.SHELL_TOKEN:
+            return True
+        self._send(403, json.dumps({"ok": False, "error": "缺少 X-Zmd-Orb 头（%s 属写操作）" % what},
+                                   ensure_ascii=False))
+        return False
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -989,6 +1159,11 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, json.dumps(snap, ensure_ascii=False))
             return
+        if path.rstrip("/") == "/processes":
+            rows, dt = list_processes()
+            self._send(200, json.dumps({"ts": time.time(), "window_s": dt,
+                                        "count": len(rows), "procs": rows}, ensure_ascii=False))
+            return
         if path.rstrip("/") == "/auto":
             self._send(200, json.dumps(auto_status(), ensure_ascii=False))
             return
@@ -997,7 +1172,8 @@ class Handler(BaseHTTPRequestHandler):
                                        {"ok": None, "error": "还没整理过"}, ensure_ascii=False))
             return
         if path.rstrip("/") == "/clean":
-            self._clean(q)          # GET 也认，方便 curl 手工测
+            if self._need_token("整理"):     # GET 也认，方便 curl 手工测
+                self._clean(q)
             return
         name = "ball.html" if path in ("/", "/index.html") else path.lstrip("/")
         if name in STATIC:
@@ -1024,12 +1200,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
         if parsed.path.rstrip("/") == "/clean":
-            self._clean(q)
+            if self._need_token("整理"):
+                self._clean(q)
+            return
+        if parsed.path.rstrip("/") == "/kill":
+            if self._need_token("结束进程"):
+                self._kill(q)
             return
         if parsed.path.rstrip("/") == "/auto":
-            self._send(200, json.dumps(set_auto(q), ensure_ascii=False))
+            if self._need_token("开关自动整理"):
+                self._send(200, json.dumps(set_auto(q), ensure_ascii=False))
             return
         self._send(404, json.dumps({"error": "未知路径 %s" % parsed.path}, ensure_ascii=False))
+
+    def _kill(self, q):
+        try:
+            pid = int((q.get("pid") or ["0"])[0])
+        except ValueError:
+            self._send(400, json.dumps({"ok": False, "error": "pid 必须是整数"}, ensure_ascii=False))
+            return
+        tree = (q.get("tree") or ["0"])[0].lower() in ("1", "true", "yes")
+        res = kill_process(pid, tree)      # 可能弹一次 UAC（权限不足时按需提权）
+        self._send(200 if res.get("ok") else 409, json.dumps(res, ensure_ascii=False))
 
     def _clean(self, q):
         tier = (q.get("tier") or ["l1"])[0]
@@ -1099,18 +1291,20 @@ def _selftest():
     log("[采集端] selftest %s %s" % ("PASS" if ok else "FAIL", msg))
 
 
-def main(gui=True, selftest=False, clean_now=None, out_path=None):
+def main(gui=True, selftest=False, clean_now=None, out_path=None, kill_now=None, kill_tree=False):
     global _fault
     use_utf8_stdio()
 
-    if clean_now:
-        # 提权 helper 模式：只整理一次，把结果写进文件就退出（不占端口、不常驻）
+    if clean_now or kill_now:
+        # 提权 helper 模式：做完一件事、把结果写进文件就退出（不占端口、不常驻）
         try:
-            res = do_clean(clean_now, force=True)
+            if clean_now:
+                res = do_clean(clean_now, force=True)
+            else:
+                res = kill_process(int(kill_now), tree=kill_tree)
         except Exception as e:
             import traceback
-            res = {"ok": False, "tier": clean_now, "error": "helper 崩了：%s" % e,
-                   "trace": traceback.format_exc()}
+            res = {"ok": False, "error": "helper 崩了：%s" % e, "trace": traceback.format_exc()}
             log("[清理端] helper 异常：\n%s" % res["trace"])
         if out_path:
             try:
@@ -1124,6 +1318,7 @@ def main(gui=True, selftest=False, clean_now=None, out_path=None):
         return 0 if res.get("ok") else 1
 
     mem = read_memory() or {}
+    state["phys_bytes"] = int((mem.get("total_mb") or 0) * MB)   # 读工作集时的回绕兜底用
     log("[采集端] 内存 %.1f GB，当前占用 %.1f%%（提交 %.1f/%.1f GB）"
         % ((mem.get("total_mb", 0)) / 1024, mem.get("pct", 0),
            (mem.get("committed_mb", 0)) / 1024, (mem.get("commit_limit_mb", 0)) / 1024))
@@ -1167,6 +1362,9 @@ if __name__ == "__main__":
     ap.add_argument("--selftest", action="store_true", help="启动后自测一次并退出")
     ap.add_argument("--clean-now", metavar="TIER", choices=("l1", "l2", "l3"),
                     help="立刻整理一次就退出（提权 helper 用，不占端口）")
-    ap.add_argument("--out", metavar="FILE", help="把 --clean-now 的结果写成 JSON 到这个文件")
+    ap.add_argument("--kill-now", metavar="PID", help="立刻结束这个进程就退出（提权 helper 用）")
+    ap.add_argument("--tree", action="store_true", help="配合 --kill-now：连子孙进程一起结束")
+    ap.add_argument("--out", metavar="FILE", help="把 --clean-now / --kill-now 的结果写成 JSON 到这个文件")
     a = ap.parse_args()
-    sys.exit(main(gui=not a.no_gui, selftest=a.selftest, clean_now=a.clean_now, out_path=a.out))
+    sys.exit(main(gui=not a.no_gui, selftest=a.selftest, clean_now=a.clean_now, out_path=a.out,
+                  kill_now=a.kill_now, kill_tree=a.tree))

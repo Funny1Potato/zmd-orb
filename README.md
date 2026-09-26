@@ -2,9 +2,9 @@
 
 常驻悬浮球：一键**整理内存缓存页**，同时能当任务管理器用。环的样式沿用 `zmd-manager`（终末地管理器）的电量环。
 
-> **状态：M2 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
-> **三级整理真生效**（按需 UAC、前后测量、节流、排除名单）、**硬缺页率**与**自动整理**（默认关）。
-> 面板进程表在 M3，托盘与开机自启在 M4。
+> **状态：M3 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
+> **三级整理真生效**（按需 UAC、前后测量、节流、排除名单）、**硬缺页率**与**自动整理**（默认关）、
+> **面板进程表**（排序/搜索/结束进程，可连子孙）。托盘与开机自启在 M4。
 
 ## 它做什么、不做什么
 
@@ -59,6 +59,17 @@ Windows 上没有"释放内存"的魔法。所谓加速球做的是两件事：�
   `POST /auto?on=1&threshold_mb=2048&check_secs=60&min_gap_secs=180`
 - 每次检查的判断原因都记着（面板上显示"上次判断：…"），没有黑箱
 
+### 进程表与结束进程（M3）
+
+- 进程表来自**一次** `NtQuerySystemInformation(SystemProcessInformation)`（403 个进程约 17~32ms）：
+  名字、内存、线程数、CPU 时间都在同一条记录里，不需要按进程逐个 `OpenProcess`
+- **CPU% 是两次采样的差**再按逻辑核数归一 —— 所以**第一次打开全是 0**（Task Manager 也是这样），
+  并且面板只在**可见时**每 2 秒采一次（收起就不采）。16 逻辑核上跑单线程满载，实测显示 6.3%（psutil 同刻 6.2%）
+- 结束进程：单个或连子孙（`tree=1`，子孙先死）。**拦住**内核/关键进程（System/smss/csrss/wininit/services/
+  lsass/winlogon/Registry/Memory Compression/fontdrvhost）与本工具自己的进程（父进程链，含壳）；
+  权限不足（其他用户或受保护进程）时**按需提权**再试一次，和整理共用同一套 helper 机制
+- 面板里受保护的进程会被压暗；点"结束进程"弹确认框（结束是不可逆的），结果写在状态行
+
 ## 为什么壳是 WPF（而不是 Web 壳）
 
 第一版壳用 Tauri 2 + WebView2，撞上一个平台级缺陷：**窗口一旦移动（拖动、换显示器、切焦点），
@@ -93,8 +104,14 @@ GET  /health          健康检查（壳启动前探活用）
 POST /clean?tier=l1   l2 / l3 整理一次；返回 summary/detail/before/after/delta/timing
 GET  /clean/result    最近一次整理的结果（面板打开时回填）
 POST /auto?on=1       开关自动整理（GET /auto 看状态与"上次判断"的原因）
+GET  /processes       进程表（pid/名字/内存/CPU%/线程/是否受保护）
+POST /kill?pid=N      结束进程（tree=1 连子孙）；权限不足时按需提权
 GET  /dev.html        设计参考页（调色用）
 ```
+
+写操作（`/clean`、`/kill`、`/auto`）要求带 `X-Zmd-Orb: zmd-orb-shell` 头，否则 403；
+采集端也**不再回 `Access-Control-Allow-Origin`**。这两条一起挡的是"网页脚本偷偷 POST 到本机 API"
+（带自定义头的跨源请求会先发预检，采集端不答预检，浏览器就拦下了；本机原生程序照旧能调）。
 
 手工测（`force=1` 跳过 30 秒节流）：
 
@@ -169,3 +186,7 @@ make_icon.py                    生成 orb/icon.ico
   尾部 7 个字段含义不明且按页换算会超过物理内存，一律不用。
 - **`FlushModifiedList` 免提权就能成功**（实测 `0x00000000`），而清待命/全系统清工作集/清文件缓存都要管理员
   ——别以为"系统级操作必然都要提权"。
+- **`SYSTEM_PROCESS_INFORMATION` 的字段偏移是"对出来"的，不是照头文件抄的**：这个结构在
+  `InheritedFromUniqueProcessId` 之后有多个版本（Winternl.h 用 `SIZE_T`、phnt 用 `ULONG`）。
+  实现里用显式偏移读，并且每个偏移都拿 psutil 对过账：CPU 时间（40/48，100ns）与 psutil 逐位吻合，
+  工作集（144，字节）跨量级核对 0 误差（最大 2.5GB 的 memory compression 也对得上）。别改成"照抄结构体"。

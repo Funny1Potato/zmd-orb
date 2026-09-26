@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="终末地加速球 · 任务管理器"
-        Width="900" Height="620" MinWidth="720" MinHeight="480"
+        Width="900" Height="780" MinWidth="720" MinHeight="480"
         WindowStyle="None" ResizeMode="CanResize" Background="#f3f3f0"
         WindowStartupLocation="CenterScreen" ShowActivated="True"
         FontFamily="Segoe UI, Microsoft YaHei" TextOptions.TextFormattingMode="Ideal"
@@ -105,8 +105,14 @@
 
       <Rectangle Grid.Row="1" Fill="#ffe23d"/>
 
-      <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="16">
+      <Grid Grid.Row="2" Margin="16">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
 
           <!-- 三个档位：轻度免提权；深度/全部要管理员，点了才会弹一次 UAC -->
           <StackPanel Orientation="Horizontal">
@@ -193,26 +199,112 @@
             </StackPanel>
           </Border>
 
-          <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
-                  Margin="5,14,5,5" Padding="16,14">
-            <StackPanel>
-              <TextBlock Text="口径与进度" FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"/>
-              <TextBlock x:Name="lastResult" Margin="0,8,0,0" FontSize="12.5" Foreground="#4a4a46"
-                         TextWrapping="Wrap" LineHeight="20" Text="还没整理过。"/>
-              <TextBlock Margin="0,10,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
-                         LineHeight="19">
-                <Run Text="“搬走”不等于“腾出”：清掉的工作集/缓存页会在下次访问时从 pagefile 硬缺页读回，"/>
-                <Run Text="available 把待命列表算作可用，清完它几乎不动——要看效果请看“空闲 + 零页”。"/>
-              </TextBlock>
-              <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
-                         LineHeight="19">
-                <Run Text="M1 已完成（三级整理、按需 UAC、前后测量、节流与排除名单）；M2 加了硬缺页率与自动整理。"/>
-                <Run Text="进程表（可结束进程）在 M3，托盘与开机自启在 M4。"/>
-              </TextBlock>
-            </StackPanel>
-          </Border>
-        </StackPanel>
-      </ScrollViewer>
+          </StackPanel>
+
+        <!-- 进程表（M3）：表头可排序，搜框过滤，结束进程要先确认 -->
+        <Border Grid.Row="1" Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1"
+                CornerRadius="8" Margin="5,14,5,0" Padding="12,10">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0" Margin="2,0,2,8">
+              <TextBlock Text="进程" FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"
+                         VerticalAlignment="Center"/>
+              <TextBlock x:Name="procCount" FontSize="11.5" Foreground="#8b8b84"
+                         VerticalAlignment="Center" Margin="44,0,0,0"/>
+              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBox x:Name="procSearch" Width="150" Height="26" FontSize="12"
+                         VerticalContentAlignment="Center" Padding="6,0"
+                         TextChanged="Search_TextChanged"
+                         ToolTip="按进程名或 PID 过滤"/>
+                <Button x:Name="BtnRefresh" Content="刷新" Style="{StaticResource ActBtn}" Height="26"
+                        Margin="8,0,0,0" Padding="10,0" Click="Refresh_Click"/>
+                <CheckBox x:Name="TreeChk" Content="连子孙" FontSize="12" Foreground="#3f3f3a"
+                          VerticalAlignment="Center" Margin="10,0,0,0" Cursor="Hand"/>
+                <Button x:Name="BtnKill" Content="结束进程" Style="{StaticResource ActBtn}" Height="26"
+                        Margin="8,0,0,0" Padding="10,0" Click="Kill_Click"/>
+              </StackPanel>
+            </Grid>
+            <DataGrid x:Name="procGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
+                      CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal"
+                      HorizontalGridLinesBrush="#eeeeea" BorderThickness="0" Background="Transparent"
+                      RowHeight="22" FontSize="12" Foreground="#4a4a46"
+                      VerticalScrollBarVisibility="Auto" Sorting="Grid_Sorting">
+              <DataGrid.ColumnHeaderStyle>
+                <Style TargetType="DataGridColumnHeader">
+                  <Setter Property="Background" Value="#f2f2ee"/>
+                  <Setter Property="Foreground" Value="#6a6a64"/>
+                  <Setter Property="FontSize" Value="11.5"/>
+                  <Setter Property="Padding" Value="6,3"/>
+                  <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                  <Setter Property="BorderBrush" Value="#dcdcd6"/>
+                  <Setter Property="HorizontalContentAlignment" Value="Left"/>
+                </Style>
+              </DataGrid.ColumnHeaderStyle>
+              <DataGrid.RowStyle>
+                <Style TargetType="DataGridRow">
+                  <Style.Triggers>
+                    <!-- 受保护的（内核/关键进程）压暗：点了也会被采集端拒绝 -->
+                    <DataTrigger Binding="{Binding Guarded}" Value="True">
+                      <Setter Property="Foreground" Value="#b3b3ab"/>
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </DataGrid.RowStyle>
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"
+                                    SortMemberPath="Name"/>
+                <DataGridTextColumn Header="PID" Binding="{Binding Pid}" Width="70"
+                                    SortMemberPath="Pid">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="HorizontalAlignment" Value="Right"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="内存" Binding="{Binding MemText}" Width="90"
+                                    SortMemberPath="MemMb">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="HorizontalAlignment" Value="Right"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="CPU" Binding="{Binding CpuText}" Width="70"
+                                    SortMemberPath="Cpu">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="HorizontalAlignment" Value="Right"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="线程" Binding="{Binding Threads}" Width="60"
+                                    SortMemberPath="Threads">
+                  <DataGridTextColumn.ElementStyle>
+                    <Style TargetType="TextBlock">
+                      <Setter Property="HorizontalAlignment" Value="Right"/>
+                    </Style>
+                  </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+          </Grid>
+        </Border>
+
+        <Border Grid.Row="2" Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1"
+                CornerRadius="8" Margin="5,10,5,0" Padding="14,10">
+          <StackPanel>
+            <TextBlock x:Name="lastResult" FontSize="12.5" Foreground="#4a4a46"
+                       TextWrapping="Wrap" LineHeight="19" Text="还没整理过。"/>
+            <TextBlock Margin="0,6,0,0" FontSize="11.5" Foreground="#8b8b84" TextWrapping="Wrap"
+                       LineHeight="17"
+                       Text="“搬走”不等于“腾出”：清掉的工作集/缓存页会在下次访问时从 pagefile 硬缺页读回；available 把待命列表算作可用，清完它几乎不动——要看效果请看“空闲 + 零页”。"/>
+          </StackPanel>
+        </Border>
+      </Grid>
     </Grid>
   </Border>
 </Window>

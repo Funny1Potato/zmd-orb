@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -52,12 +53,94 @@ sealed class CleanResult
     public double PurgedGb => Math.Max(0, -StandbyDeltaMb) / 1024.0;
 }
 
+/// <summary>进程表里的一行（对应采集端 /processes 的一条）。</summary>
+sealed class ProcRow
+{
+    public int Pid { get; set; }
+    public string Name { get; set; } = "";
+    public double MemMb { get; set; }
+    public double Cpu { get; set; }
+    public int Threads { get; set; }
+    public bool Guarded { get; set; }
+    public string MemText => MemMb >= 1024 ? (MemMb / 1024).ToString("F1") + " GB"
+                                           : MemMb.ToString("F0") + " MB";
+    public string CpuText => Cpu <= 0.05 ? "" : Cpu.ToString("F1") + "%";
+}
+
+/// <summary>写操作的结果（结束进程等）。</summary>
+sealed class ActionResult
+{
+    public bool Ok;
+    public string Summary = "", Error = "";
+}
+
 static class MemoryApi
 {
     const string BaseUrl = "http://127.0.0.1:8910";
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(1200) };
-    // 整理可能要等用户点 UAC（采集端的提权等待上限是 90s），所以这条链路的超时放宽
-    static readonly HttpClient HttpClean = new() { Timeout = TimeSpan.FromSeconds(150) };
+    const string ShellToken = "zmd-orb-shell";
+    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(1500) };
+    // 整理/结束进程可能要等用户点 UAC（采集端的提权等待上限是 90s），所以这两条链路的超时放宽
+    static readonly HttpClient HttpAction = new() { Timeout = TimeSpan.FromSeconds(150) };
+
+    /// <summary>写操作要带这个头：采集端据此拒绝"网页脚本偷偷发过来的"写请求。</summary>
+    static HttpRequestMessage Req(HttpMethod method, string path)
+    {
+        var r = new HttpRequestMessage(method, BaseUrl + path);
+        r.Headers.Add("X-Zmd-Orb", ShellToken);
+        return r;
+    }
+
+    public static async Task<List<ProcRow>?> ProcessesAsync()
+    {
+        try
+        {
+            using var resp = await Http.GetAsync(BaseUrl + "/processes");
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (!doc.RootElement.TryGetProperty("procs", out var arr) || arr.ValueKind != JsonValueKind.Array)
+                return null;
+            var list = new System.Collections.Generic.List<ProcRow>(512);
+            foreach (var p in arr.EnumerateArray())
+            {
+                list.Add(new ProcRow
+                {
+                    Pid = (int)Num(p, "pid"),
+                    Name = Str(p, "name"),
+                    MemMb = Num(p, "mem_mb"),
+                    Cpu = Num(p, "cpu"),
+                    Threads = (int)Num(p, "threads"),
+                    Guarded = p.TryGetProperty("guarded", out var g) && g.ValueKind == JsonValueKind.True,
+                });
+            }
+            return list;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>结束进程；tree=true 连子孙一起（采集端在权限不足时会按需提权再试）。</summary>
+    public static async Task<ActionResult> KillAsync(int pid, bool tree)
+    {
+        try
+        {
+            using var resp = await HttpAction.SendAsync(
+                Req(HttpMethod.Post, $"/kill?pid={pid}&tree={(tree ? 1 : 0)}"));
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var root = doc.RootElement;
+            return new ActionResult
+            {
+                Ok = root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
+                Summary = Str(root, "summary"),
+                Error = Str(root, "error"),
+            };
+        }
+        catch (Exception ex)
+        {
+            return new ActionResult { Ok = false, Error = "连不上采集端（" + ex.GetType().Name + "）" };
+        }
+    }
 
     public static async Task<MemSnapshot?> GetAsync()
     {
@@ -108,7 +191,7 @@ static class MemoryApi
     {
         try
         {
-            using var resp = await HttpClean.PostAsync(BaseUrl + "/clean?tier=" + tier, null);
+            using var resp = await HttpAction.SendAsync(Req(HttpMethod.Post, "/clean?tier=" + tier));
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             var r = ParseClean(doc.RootElement);
             r.Tier = string.IsNullOrEmpty(r.Tier) ? tier : r.Tier;
@@ -143,7 +226,8 @@ static class MemoryApi
     {
         try
         {
-            using var resp = await Http.PostAsync(BaseUrl + "/auto?on=" + (enabled ? "1" : "0"), null);
+            using var resp = await HttpAction.SendAsync(
+                Req(HttpMethod.Post, "/auto?on=" + (enabled ? "1" : "0")));
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             var root = doc.RootElement;
             return new AutoStatus

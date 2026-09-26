@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -8,11 +10,17 @@ using System.Windows.Threading;
 
 namespace ZmdOrb;
 
-/// <summary>任务管理器面板。M1 三档整理真生效；M2 加硬缺页率与自动整理开关；进程表在 M3。</summary>
+/// <summary>任务管理器面板。M1 三档整理；M2 硬缺页率与自动整理；M3 进程表与结束进程。</summary>
 public partial class PanelWindow : Window
 {
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
-    bool _polling, _quitting, _cleaning, _autoBusy;
+    // 进程表只在面板可见时才刷新（面板平时是收起来的，没必要一直采）
+    readonly DispatcherTimer _procTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    bool _polling, _quitting, _cleaning, _autoBusy, _procBusy, _killing, _procLogged;
+
+    List<ProcRow> _procAll = new();
+    string _sortPath = "MemMb";
+    bool _sortDesc = true;
 
     /// <summary>球上报的粒子团实测帧率。</summary>
     public Func<double>? BallFps { get; set; }
@@ -22,6 +30,20 @@ public partial class PanelWindow : Window
         InitializeComponent();
         _poll.Tick += (_, _) => Poll();
         _poll.Start();
+        _procTimer.Tick += async (_, _) => await LoadProcsAsync();
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+            {
+                _procLogged = false;
+                _procTimer.Start();
+                _ = LoadProcsAsync();
+            }
+            else
+            {
+                _procTimer.Stop();       // 收起就不再采
+            }
+        };
         Loaded += (_, _) =>
         {
             Poll();
@@ -119,6 +141,117 @@ public partial class PanelWindow : Window
             _autoBusy = false;
             AutoChk.IsEnabled = true;
         }
+    }
+
+    /* ---------------- 进程表（M3） ---------------- */
+
+    async System.Threading.Tasks.Task LoadProcsAsync()
+    {
+        if (_procBusy || _killing || !IsVisible) return;
+        _procBusy = true;
+        try
+        {
+            var list = await MemoryApi.ProcessesAsync();
+            if (list == null)
+            {
+                procCount.Text = "采集端未启动";
+                return;
+            }
+            _procAll = list;
+            RefreshGrid();
+            if (!_procLogged)
+            {
+                _procLogged = true;      // 每次打开面板只记一条，免得刷日志
+                Diag.Log($"面板：进程表已加载 {list.Count} 个进程，最大内存 "
+                         + (list.Count > 0 ? list[0].Name + " " + list[0].MemText : "—"));
+            }
+        }
+        finally { _procBusy = false; }
+    }
+
+    void RefreshGrid()
+    {
+        string q = procSearch.Text.Trim();
+        IEnumerable<ProcRow> rows = _procAll;
+        if (q.Length > 0)
+        {
+            rows = rows.Where(r => r.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                                || r.Pid.ToString() == q);
+        }
+        // 自己排：直接重建 ItemsSource，DataGrid 原来的排序会被冲掉
+        Func<ProcRow, object> key = _sortPath switch
+        {
+            "Name" => r => r.Name,
+            "Pid" => r => r.Pid,
+            "Cpu" => r => r.Cpu,
+            "Threads" => r => r.Threads,
+            _ => r => r.MemMb,
+        };
+        var ordered = (_sortDesc ? rows.OrderByDescending(key) : rows.OrderBy(key)).ToList();
+
+        int? keep = (procGrid.SelectedItem as ProcRow)?.Pid;
+        procGrid.ItemsSource = ordered;
+        if (keep != null)
+        {
+            var again = ordered.FirstOrDefault(r => r.Pid == keep);
+            if (again != null) procGrid.SelectedItem = again;    // 刷新后尽量别丢选中
+        }
+        procCount.Text = q.Length > 0
+            ? $"{ordered.Count} / {_procAll.Count} 个"
+            : $"{_procAll.Count} 个 · 每 2 秒刷新（CPU% 是这两秒的均值）";
+    }
+
+    void Grid_Sorting(object sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;                    // 自己排，别让 DataGrid 排完又被重建冲掉
+        string path = e.Column.SortMemberPath;
+        _sortDesc = path == _sortPath ? !_sortDesc : true;
+        _sortPath = path;
+        foreach (var c in procGrid.Columns)
+        {
+            c.SortDirection = c.SortMemberPath == path
+                ? (_sortDesc ? ListSortDirection.Descending : ListSortDirection.Ascending)
+                : null;
+        }
+        RefreshGrid();
+    }
+
+    void Search_TextChanged(object sender, TextChangedEventArgs e) => RefreshGrid();
+
+    async void Refresh_Click(object sender, RoutedEventArgs e) => await LoadProcsAsync();
+
+    async void Kill_Click(object sender, RoutedEventArgs e)
+    {
+        if (_killing) return;
+        if (procGrid.SelectedItem is not ProcRow row)
+        {
+            statusLine.Text = "先在进程表里点选一个进程。";
+            return;
+        }
+        bool tree = TreeChk.IsChecked == true;
+        var ok = MessageBox.Show(this,
+            $"确定结束 {row.Name}（pid {row.Pid}）{(tree ? "及其子孙进程" : "")}？\n\n该进程没保存的数据会丢。",
+            "结束进程", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (ok != MessageBoxResult.OK) return;
+
+        _killing = true;
+        BtnKill.IsEnabled = false;
+        statusLine.Text = $"正在结束 {row.Name}（pid {row.Pid}）{(tree ? "及子孙" : "")}…";
+        Diag.Log($"面板：结束进程 {row.Name}({row.Pid}) tree={tree}");
+        try
+        {
+            var r = await MemoryApi.KillAsync(row.Pid, tree);
+            statusLine.Text = r.Ok
+                ? (string.IsNullOrEmpty(r.Summary) ? "已结束" : r.Summary)
+                : "没能结束：" + (string.IsNullOrEmpty(r.Error) ? "未知原因" : r.Error);
+            Diag.Log($"面板：结束进程结果 → {statusLine.Text}");
+        }
+        finally
+        {
+            _killing = false;
+            BtnKill.IsEnabled = true;
+        }
+        await LoadProcsAsync();
     }
 
     async void RunClean(string tier, string label)
