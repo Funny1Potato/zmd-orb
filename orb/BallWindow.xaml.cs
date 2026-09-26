@@ -18,15 +18,16 @@ public partial class BallWindow : Window
     const double CooldownMs = 30000;    // 冷却 30s（与采集端的 THROTTLE 保持一致）
     const double DragThreshold = 4;     // 位移超过 4px 算拖拽，否则算单击
     const double SweepMs = 600, SettleMs = 520;
-    const double DegradeHintMb = 2048;  // 待命列表超过这个量就提示"面板里可深度整理"
     const string Tier = "l1";           // 单击只跑轻度：免提权、不弹 UAC
 
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
-    readonly Brush _warn = new SolidColorBrush(Ring.Hex("#c2703a"));
+
+    static readonly Brush Ink = Frozen("#4a4a46");   // 有实时数据
+    static readonly Brush Dim = Frozen("#a2a29b");   // 回落演示数据：数字调暗，免得把编的数值当真
 
     // 取数状态
     bool _live;
-    double _memPct, _availMb, _commitPct, _cacheMb, _freeZeroMb, _standbyMb;
+    double _memPct;
     double _demoPct = 62;
     bool _polling;
 
@@ -53,7 +54,6 @@ public partial class BallWindow : Window
     public BallWindow()
     {
         InitializeComponent();
-        _warn.Freeze();
         Poll();
         _poll.Tick += (_, _) => Poll();
         _poll.Start();
@@ -92,45 +92,25 @@ public partial class BallWindow : Window
             {
                 _live = true;
                 _memPct = s.Pct;
-                _availMb = s.AvailMb;
-                _commitPct = s.CommitPct;
-                _cacheMb = s.SystemCacheMb;
-                _freeZeroMb = s.FreeZeroMb;
-                _standbyMb = s.StandbyMb;
             }
             else
             {
                 _live = false;
                 _demoPct = Math.Max(6, Math.Min(96, _demoPct + (Random.Shared.NextDouble() - 0.5) * 1.4));
                 _memPct = _demoPct;
-                _availMb = (32 - 32 * _memPct / 100) * 1024;
-                _commitPct = 0;
-                _cacheMb = 0;
-                _freeZeroMb = 0;
-                _standbyMb = 0;
             }
             if (!_busy) Render();
         }
         finally { _polling = false; }
     }
 
+    /// <summary>球面只显示占用率一个数（原来的"可用 xx G / 提交 xx%"那行太小看不清，去掉了）。</summary>
     void Render()
     {
         double p = Math.Max(0, Math.Min(100, _memPct));
         Visual.Pct = p;
         PctNum.Text = Math.Round(p).ToString();
-
-        SubText.Inlines.Clear();
-        if (_live)
-        {
-            SubText.Inlines.Add(new Run("可用 " + (_availMb / 1024).ToString("F1") + "G"));
-            if (_commitPct >= 85)      // 提交额度才是真会把程序打崩的东西，超 85% 标出来
-                SubText.Inlines.Add(new Run(" · 提交 " + _commitPct.ToString("F0") + "%") { Foreground = _warn });
-        }
-        else
-        {
-            SubText.Inlines.Add(new Run("演示数据"));
-        }
+        PctText.Foreground = _live ? Ink : Dim;
     }
 
     /* ---------------- 帧循环（30fps 封顶） ---------------- */
@@ -161,9 +141,6 @@ public partial class BallWindow : Window
 
     /* ---------------- 单击：真的整理（M1，轻度档） ---------------- */
 
-    string _pendingFloat = "";
-    string? _pendingHint;
-
     async void DoClean()
     {
         if (_busy) return;
@@ -192,29 +169,16 @@ public partial class BallWindow : Window
             return;
         }
 
-        if (!double.IsNaN(res.PctAfter))
-        {
-            _memPct = res.PctAfter;
-            _standbyMb = res.StandbyAfterMb;
-            _freeZeroMb = res.FreeZeroAfterMb;
-        }
+        if (!double.IsNaN(res.PctAfter)) _memPct = res.PctAfter;
         _anim = new CleanAnim
         {
             Settling = true,
             Target = double.IsNaN(res.PctAfter) ? _memPct : res.PctAfter,
             T0 = _now,
         };
-        _pendingFloat = BallLine(res);
-        _pendingHint = res.StandbyAfterMb > DegradeHintMb
-            ? "待命 " + (res.StandbyAfterMb / 1024).ToString("F1") + "G，可深度整理"
-            : null;
+        // 整理成功不再弹文案：球窗口只有 160px，短文案也读不清，明细留给面板与日志
         Diag.Log($"整理完成 {res.Tier}：{res.Summary}｜{res.Detail}");
     }
-
-    /// <summary>球上的短文案。球窗口只有 160px 宽，长文案会被裁掉，明细留给面板。</summary>
-    static string BallLine(CleanResult r) => r.Tier == "l1"
-        ? "换出 " + r.MovedGb.ToString("F1") + "G 工作集"
-        : "整理 " + r.PurgedGb.ToString("F1") + "G 缓存页";
 
     void ResetAnim(string text)
     {
@@ -247,7 +211,6 @@ public partial class BallWindow : Window
             Visual.SetBreathe(1, 1);
             Render();                              // 落回真实占用（真实值已在 DoClean 里更新过）
             ScaleTo(_hover ? 1.05 : 1, 160);
-            ShowFloat(_pendingFloat, _pendingHint);
             return;
         }
         double e = 1 - Math.Pow(1 - k2, 3);
@@ -344,20 +307,11 @@ public partial class BallWindow : Window
         (Application.Current as App)?.OpenPanel();
     }
 
-    /* ---------------- 浮字提示 ---------------- */
+    /* ---------------- 浮字提示（只剩"冷却中/失败"这类短提示） ---------------- */
 
-    void ShowFloat(string text, string? hint = null)
+    void ShowFloat(string text)
     {
         FloatText.Text = text;
-        if (!string.IsNullOrEmpty(hint))
-        {
-            FloatHint.Text = hint;
-            FloatHint.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            FloatHint.Visibility = Visibility.Collapsed;
-        }
         FloatShift.BeginAnimation(TranslateTransform.YProperty, null);
         FloatShift.Y = 4;
         FloatBox.BeginAnimation(OpacityProperty,
@@ -366,10 +320,7 @@ public partial class BallWindow : Window
             new DoubleAnimation(-10, TimeSpan.FromMilliseconds(450))
             { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
 
-        var t = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromMilliseconds(string.IsNullOrEmpty(hint) ? 1700 : 2600),
-        };
+        var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1700) };
         t.Tick += (_, _) =>
         {
             t.Stop();
@@ -378,5 +329,12 @@ public partial class BallWindow : Window
             FloatShift.Y = 4;
         };
         t.Start();
+    }
+
+    static Brush Frozen(string hex)
+    {
+        var b = new SolidColorBrush(Ring.Hex(hex));
+        b.Freeze();
+        return b;
     }
 }

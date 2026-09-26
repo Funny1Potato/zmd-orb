@@ -23,14 +23,10 @@
 
     <local:BallVisual x:Name="Visual"/>
 
-    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" IsHitTestVisible="False">
-      <TextBlock x:Name="PctText" HorizontalAlignment="Center" Foreground="#4a4a46"
-                 FontSize="29" FontWeight="SemiBold" TextAlignment="Center"
-                 LineHeight="29" LineStackingStrategy="BlockLineHeight"><Run x:Name="PctNum" Text="—"/><Run x:Name="PctSign" Text="%" FontSize="13"/></TextBlock>
-      <TextBlock x:Name="SubText" HorizontalAlignment="Center" Margin="0,4,0,0"
-                 FontSize="10" Foreground="#7b7b74" TextAlignment="Center"
-                 LineHeight="12" LineStackingStrategy="BlockLineHeight"/>
-    </StackPanel>
+    <TextBlock x:Name="PctText" VerticalAlignment="Center" HorizontalAlignment="Center"
+               IsHitTestVisible="False" Foreground="#4a4a46"
+               FontSize="36" FontWeight="SemiBold" TextAlignment="Center"
+               LineHeight="36" LineStackingStrategy="BlockLineHeight"><Run x:Name="PctNum" Text="—"/><Run x:Name="PctSign" Text="%" FontSize="15"/></TextBlock>
 
     <StackPanel x:Name="FloatBox" VerticalAlignment="Top" HorizontalAlignment="Center"
                 Margin="0,22,0,0" Opacity="0" IsHitTestVisible="False">
@@ -40,9 +36,6 @@
       <TextBlock x:Name="FloatText" HorizontalAlignment="Center" FontSize="11" FontWeight="SemiBold"
                  Foreground="#8a7a2a" TextAlignment="Center" LineHeight="13"
                  LineStackingStrategy="BlockLineHeight"/>
-      <TextBlock x:Name="FloatHint" HorizontalAlignment="Center" FontSize="10" Margin="0,2,0,0"
-                 Foreground="#a4893f" TextAlignment="Center" LineHeight="12"
-                 LineStackingStrategy="BlockLineHeight" Visibility="Collapsed"/>
     </StackPanel>
   </Grid>
 </Window>
