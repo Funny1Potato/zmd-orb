@@ -142,8 +142,9 @@ static class MemoryApi
         {
             foreach (var st in steps.EnumerateArray())
             {
-                bool ok = st.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
-                if (!ok) r.FailedSteps.Add(Str(st, "step") + "：" + Str(st, "result"));
+                // 不能叫 ok：外层对象初始化里的 out var ok 作用域覆盖整个方法（CS0136）
+                bool stepOk = st.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
+                if (!stepOk) r.FailedSteps.Add(Str(st, "step") + "：" + Str(st, "result"));
             }
         }
         return r;
