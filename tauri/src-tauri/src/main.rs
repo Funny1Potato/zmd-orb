@@ -85,6 +85,23 @@ fn end_drag_cleanup(app: tauri::AppHandle) {
     }
 }
 
+/// 拖动开始时调用：先把球藏起来，再走系统原生拖动。
+/// 拖动过程中窗口持续移动，WebView2 那层每动一次就留旧帧（表现为整块泛底），而拖动期间
+/// 又没法逐帧重建，所以索性拖动期间不显示；松手后由 end_drag_cleanup 在目标位置重新出现。
+#[tauri::command]
+fn begin_drag(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        if let Some(ball) = app.get_webview_window("ball") {
+            let _ = ball.hide();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
 /// 强杀 backend 进程树。PyInstaller onefile 会 fork 子进程承载实际逻辑，
 /// 只 kill 直接子进程会留下孤儿 python 继续占 8910，故用 taskkill /T。
 fn kill_backend(child: &mut Child) {
@@ -332,7 +349,8 @@ fn main() {
             close_panel,
             set_ball_visible,
             refresh_ball_window,
-            end_drag_cleanup
+            end_drag_cleanup,
+            begin_drag
         ])
         .build(tauri::generate_context!())
         .expect("error building app")
@@ -357,6 +375,12 @@ fn main() {
                             if let Some(ball) = app.get_webview_window("ball") {
                                 clip_to_circle(&ball);
                                 force_repaint(&ball, "resized");
+                            }
+                        }
+                        // 切换焦点时窗口状态会变，也会短暂泛底一下，顺手重绘
+                        tauri::WindowEvent::Focused(_) => {
+                            if let Some(ball) = app.get_webview_window("ball") {
+                                force_repaint(&ball, "focus");
                             }
                         }
                         _ => {}
