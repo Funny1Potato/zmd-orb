@@ -34,7 +34,11 @@ public partial class PanelWindow : Window
 
     // ---- 页1 应用概况 / 页2 设备 ----
     List<AppRow> _appRows = new();
+    List<AppInfo> _lastApps = new();
     string _appSig = "";
+    string _appSort = "Cpu";            // 应用概况排序：Cpu / Mem / Name（点表头切换）
+    bool _appSortDesc = true;
+    int _appLimit = 40;                 // 显示条数（来自采集端的 app_limit 设置）
     List<DeviceRow> _devices = new();
     string _devSig = "";
 
@@ -161,6 +165,7 @@ public partial class PanelWindow : Window
         _maxOcc = UiSettings.MaxOccMb > 0 ? UiSettings.MaxOccMb : (limitMb > 0 ? limitMb : _maxOcc);
         if (limitMb > 0) _commitLimitMb = limitMb;
 
+        _appLimit = s.AutoAppLimit > 0 ? (int)s.AutoAppLimit : 40;   // 显示条数来自采集端设置
         SyncApps(s.Procs);
         SyncDevices(BuildDevices(s));
         UpdateOverview();
@@ -258,15 +263,16 @@ public partial class PanelWindow : Window
     static double Parse(TextBox box, double fallback) =>
         double.TryParse(box.Text.Trim(), out var v) && v >= 0 ? v : fallback;
 
-    /* ---- 页1：应用概况（按 pid 序列判断是重建还是就地更新，与参考一致） ---- */
+    /* ---- 页1：应用概况（排序 + 显示条数由本页决定；按 pid 序列判断是重建还是就地更新） ---- */
 
     void SyncApps(List<AppInfo> procs)
     {
-        var rows = new List<AppRow>(procs.Count);
+        _lastApps = procs;                       // 留着给"点表头改排序"时立刻重排
+        var all = new List<AppRow>(procs.Count);
         foreach (var p in procs)
         {
             string disp = string.IsNullOrEmpty(p.Display) ? p.Name : p.Display;
-            rows.Add(new AppRow
+            all.Add(new AppRow
             {
                 Pid = p.Pid,
                 Name = disp,
@@ -276,6 +282,21 @@ public partial class PanelWindow : Window
                 MemMb = p.MemMb,
             });
         }
+        // 采集端只发候选集（活跃度过滤 + 宽上限），排序与显示条数在这里定
+        Func<AppRow, object> key = _appSort switch
+        {
+            "Name" => r => r.Name,
+            "Mem" => r => r.MemMb,
+            _ => r => r.Cpu,
+        };
+        var ordered = (_appSortDesc ? all.OrderByDescending(key) : all.OrderBy(key));
+        var rows = ordered.Take(Math.Max(1, _appLimit)).ToList();
+
+        string arrow = _appSortDesc ? " ▾" : " ▴";
+        headAppName.Text = "应用名称" + (_appSort == "Name" ? arrow : "");
+        headAppCpu.Text = "CPU 占用" + (_appSort == "Cpu" ? arrow : "");
+        headAppMem.Text = "内存占用" + (_appSort == "Mem" ? arrow : "");
+
         string sig = string.Join(",", rows.Select(r => r.Pid));
         if (sig != _appSig)
         {
@@ -306,6 +327,22 @@ public partial class PanelWindow : Window
             a.MemBar = Math.Min(86, Math.Max(2, a.MemMb / maxMem * 86));
             a.Notify();
         }
+    }
+
+    /* ---- 页1：应用概况的排序（点表头） ---- */
+
+    void AppSort_Name(object sender, MouseButtonEventArgs e) => SetAppSort("Name");
+    void AppSort_Cpu(object sender, MouseButtonEventArgs e) => SetAppSort("Cpu");
+    void AppSort_Mem(object sender, MouseButtonEventArgs e) => SetAppSort("Mem");
+
+    void SetAppSort(string key)
+    {
+        // 名称默认升序，数值默认降序；点同一列则反向
+        _appSortDesc = key == _appSort ? !_appSortDesc : key != "Name";
+        _appSort = key;
+        SyncApps(_lastApps);        // 立刻重排，不等下一次轮询
+        var top = _appRows.Take(3).Select(r => $"{r.Name}({r.CpuText}%/{r.MemText})");
+        Diag.Log($"面板：应用概况排序 → {key}{(_appSortDesc ? " 降序" : " 升序")}，前三：{string.Join(" | ", top)}");
     }
 
     /* ---- 页2：设备行（key 序列变化才重建，否则就地更新并推进走势） ---- */

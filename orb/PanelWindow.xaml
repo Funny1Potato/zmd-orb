@@ -459,21 +459,27 @@
                       <TextBlock Text="A" FontSize="9" Foreground="{StaticResource Yellow}"
                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Text="应用名称" Style="{StaticResource ColHead}" Margin="7,0,0,0"/>
+                    <TextBlock x:Name="headAppName" Text="应用名称" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                               Cursor="Hand" ToolTip="点一下按名称排序"
+                               MouseLeftButtonUp="AppSort_Name"/>
                   </StackPanel>
                   <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Border Style="{StaticResource ColHeadMark}">
                       <TextBlock Text="C" FontSize="9" Foreground="{StaticResource Yellow}"
                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Text="CPU 占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"/>
+                    <TextBlock x:Name="headAppCpu" Text="CPU 占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                               Cursor="Hand" ToolTip="点一下按 CPU 排序"
+                               MouseLeftButtonUp="AppSort_Cpu"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
                     <Border Style="{StaticResource ColHeadMark}">
                       <TextBlock Text="M" FontSize="9" Foreground="{StaticResource Yellow}"
                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
-                    <TextBlock Text="内存占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"/>
+                    <TextBlock x:Name="headAppMem" Text="内存占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                               Cursor="Hand" ToolTip="点一下按内存排序"
+                               MouseLeftButtonUp="AppSort_Mem"/>
                   </StackPanel>
                   <Rectangle Grid.ColumnSpan="3" Height="1" Stroke="#b5b5b0" StrokeThickness="1"
                              StrokeDashArray="3,2" VerticalAlignment="Bottom"/>

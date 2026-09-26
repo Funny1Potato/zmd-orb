@@ -301,14 +301,18 @@ def sample_procs():
 
 
 def top_apps(rows):
-    """应用概况列表的子集：滤掉几乎不动的、按 CPU 倒序、条数上限来自配置（面板可改）。"""
-    limit = int((state.get("auto") or {}).get("app_limit", PROC_LIMIT) or PROC_LIMIT)
+    """应用概况的候选集：滤掉几乎不动的，按 CPU 倒序，最多 APP_SEND_MAX 条。
+
+    注意：**不能**只发"CPU 前 N 名"——面板还要能按内存/名称排序，若这里先按 CPU 截断，
+    内存大户就根本不在列表里了。所以这里只做活跃度过滤 + 一个宽上限，
+    "显示几条（app_limit）"与"按哪列排"都由面板决定。
+    """
     keep = [p for p in rows if p["pid"] != 0 and not (p["cpu"] < 0.5 and p["mem_mb"] < 40)]
     keep.sort(key=lambda p: (-p["cpu"], -p["mem_mb"]))
     return [{"pid": p["pid"], "name": p["name"], "exe": "",
              "mem": round(p["mem_mb"]), "cpu": p["cpu"],
              "display": p.get("display") or p["name"].replace(".exe", ""),
-             "title": p.get("title") or ""} for p in keep[:limit]]
+             "title": p.get("title") or ""} for p in keep[:APP_SEND_MAX]]
 
 
 def build_snapshot(mem, rows):
@@ -1211,7 +1215,8 @@ def auto_tick():
 # ---------------- 设备数据（照搬 zmd-manager 的采集口径） ----------------
 # 面板的"综合占用 / 设备性能"两页要这些东西：静态硬件只在启动取一次，显卡与硬盘性能计数器走慢循环。
 SLOW_INTERVAL = 1.5     # 慢速采样（显卡 / 硬盘性能计数器）
-PROC_LIMIT = 40         # 应用概况列表最多条目（与参考一致）
+PROC_LIMIT = 40         # 应用概况默认显示条数（面板可改，见 app_limit）
+APP_SEND_MAX = 200      # 应用概况候选集上限（面板要支持按内存/名称排序，所以不能只发 CPU 前 N）
 SUB_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5"}
 _meta = {}              # pid -> {desc, title} 应用名缓存（照搬参考的缓存策略）
