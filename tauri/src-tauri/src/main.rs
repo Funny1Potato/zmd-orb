@@ -188,6 +188,58 @@ fn hide_from_taskbar(window: &tauri::WebviewWindow) {
     }
 }
 
+/// 把窗口的命中区裁成一个内切圆（方窗口的内切椭圆就是圆）。
+/// 无边框透明窗口本身是矩形的，四角那些"看着是空的"区域照样会吃掉点击，
+/// 让下面的窗口点不动；裁掉之后四角就点击穿透了。球的可见内容（含描边）最大半径
+/// 约 76.6/80，落在这个圆内，所以不会被裁到。
+#[cfg(windows)]
+fn clip_to_circle(window: &tauri::WebviewWindow) {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    struct RECT {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    extern "system" {
+        fn GetClientRect(hwnd: *mut c_void, rect: *mut RECT) -> i32;
+        fn CreateEllipticRgn(x1: i32, y1: i32, x2: i32, y2: i32) -> *mut c_void;
+        fn SetWindowRgn(hwnd: *mut c_void, rgn: *mut c_void, redraw: i32) -> i32;
+        fn DeleteObject(obj: *mut c_void) -> i32;
+    }
+
+    match window.hwnd() {
+        Ok(h) => unsafe {
+            let hwnd = h.0 as *mut c_void;
+            let mut rc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            if GetClientRect(hwnd, &mut rc) == 0 {
+                diag_log("clip_to_circle: GetClientRect 失败");
+                return;
+            }
+            let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
+            if w <= 0 || h <= 0 {
+                return;
+            }
+            let rgn = CreateEllipticRgn(0, 0, w, h);
+            if rgn.is_null() {
+                diag_log("clip_to_circle: CreateEllipticRgn 失败");
+                return;
+            }
+            if SetWindowRgn(hwnd, rgn, 1) == 0 {
+                // 失败时区域仍归调用方所有，得自己释放（成功则交给系统，不能删）
+                DeleteObject(rgn);
+                diag_log("clip_to_circle: SetWindowRgn 失败");
+            } else {
+                diag_log(&format!("clip_to_circle: 已裁剪为 %dx%d 内切圆", w, h));
+            }
+        },
+        Err(e) => diag_log(&format!("clip_to_circle: 取不到 hwnd: {e}")),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Backend(Mutex::new(None)))
@@ -205,8 +257,11 @@ fn main() {
             // 球不进任务栏/Alt-Tab（Tauri 的 skipTaskbar 在 Windows 上没起作用，见函数注释）
             #[cfg(windows)]
             match app.get_webview_window("ball") {
-                Some(ball) => hide_from_taskbar(&ball),
-                None => diag_log("setup: 没找到 ball 窗口，跳过任务栏隐藏"),
+                Some(ball) => {
+                    hide_from_taskbar(&ball);
+                    clip_to_circle(&ball);
+                }
+                None => diag_log("setup: 没找到 ball 窗口，跳过任务栏隐藏与圆形裁剪"),
             }
             Ok(())
         })
@@ -218,11 +273,21 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error building app")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
+        .run(|app, event| match event {
+            RunEvent::Exit => {
                 if let Some(mut c) = app.state::<Backend>().0.lock().unwrap().take() {
                     kill_backend(&mut c);
                 }
             }
+            // 拖到不同缩放的显示器时窗口尺寸会变，圆形裁剪区域要跟着重算
+            #[cfg(windows)]
+            RunEvent::WindowEvent { label, event } => {
+                if label == "ball" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                    if let Some(ball) = app.get_webview_window("ball") {
+                        clip_to_circle(&ball);
+                    }
+                }
+            }
+            _ => {}
         });
 }

@@ -65,19 +65,19 @@ function buildRing(svg, opts) {
     svg.appendChild(n);
     return n;
   };
-  /* 描边：主环与两条装饰弧都描一圈。做法是"在底色下面再画一道更粗的同形描边"——
-     这样圆弧两侧和两端的圆头会被完整包住，而不是只在两侧各加一条线。
-     （zmd 里装饰弧用的是 railOut/railIn 两条侧线，端头是敞开的；这里按需求改成整圈。） */
+  /* 描边：主环与两条装饰弧都描一圈。做法是"在底色下面再画一道更粗的同形描边"。
+     装饰弧两端保持平头棱角（不圆头）——所以描边不是靠圆头包住端面，而是把这层
+     描边在角度上朝两端各外延 capExt（＝描边厚度折算成的角度），端面于是被平直地描上。 */
   const ow = o.outlineW;
   const useOutline = o.outline !== 0;
+  const capExt = (ow * 180) / (Math.PI * o.rDeco);
   const deco = (from, to, color) => {
     if (useOutline) {
       const under = el('path', { fill: 'none', stroke: o.colorOutline,
-                                 'stroke-width': o.wDeco + 2 * ow, 'stroke-linecap': 'round' });
-      under.setAttribute('d', arcPath(cx, cy, o.rDeco, from, to));
+                                 'stroke-width': o.wDeco + 2 * ow });
+      under.setAttribute('d', arcPath(cx, cy, o.rDeco, from - capExt, to + capExt));
     }
-    const p = el('path', { fill: 'none', stroke: color, 'stroke-width': o.wDeco,
-                           'stroke-linecap': 'round', opacity: '.95' });
+    const p = el('path', { fill: 'none', stroke: color, 'stroke-width': o.wDeco, opacity: '.95' });
     p.setAttribute('d', arcPath(cx, cy, o.rDeco, from, to));
   };
   deco(270, 360, o.colorDecoLeft);                       // 9 点 → 12 点（左上）
