@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>zmd-orb · 球</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:transparent;overflow:hidden;
+            user-select:none;-webkit-user-select:none;
+            font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+  #stage{position:relative;width:100%;height:100%;transition:transform .16s ease;transform-origin:50% 50%;}
+  #stage:hover{transform:scale(1.05);}
+  #stage.busy{transform:scale(1.09);}
+  svg{position:absolute;inset:0;}
+  #blob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);}
+  #center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+          pointer-events:none;color:#4a4a46;text-align:center;}
+  #pct{font-size:29px;font-weight:600;line-height:1;letter-spacing:-.5px;}
+  #pct small{font-size:13px;font-weight:600;}
+  #sub{font-size:10px;color:#7b7b74;margin-top:4px;line-height:1.2;}
+  #sub b{color:#c2703a;}
+  #float{position:absolute;left:0;right:0;top:26px;text-align:center;font-size:11px;font-weight:600;
+         color:#8a7a2a;opacity:0;transform:translateY(4px);
+         transition:opacity .25s ease,transform .45s ease;pointer-events:none;}
+  #float.on{opacity:1;transform:translateY(-10px);}
+  #badge{position:absolute;left:50%;bottom:13px;width:5px;height:5px;border-radius:50%;margin-left:-2.5px;
+         background:#cfcfc9;transition:background .3s;}
+  #badge.live{background:#8fbf7a;}
+  #badge.demo{background:#e3c25c;}
+  #badge.warn{background:#d9603a;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="ring"></svg>
+  <canvas id="blob"></canvas>
+  <div id="center">
+    <div id="pct">—</div>
+    <div id="sub">取数中…</div>
+  </div>
+  <div id="float"></div>
+  <div id="badge"></div>
+</div>
+<script src="ring.js"></script>
+<script src="api.js"></script>
+<script>
+/* ------------------------------------------------------------------
+ * 悬浮球。M0 状态：
+ *   - 环与粒子团已就位，数据取自本地采集端 /snapshot；取不到就回落演示数据（右下角指示点）
+ *   - 单击 = 整理动画（**M0 是演示动画**，真的清理接口在 M1，所以浮字明确写"演示"）
+ *   - 拖拽 = 原生窗口拖动；单击/拖拽按 4px 位移阈值区分
+ *   - 右键/双击 = 打开面板（真正的右键菜单在 M4）
+ * 精修参数（dev.html 用）：?size=160&r=52&fps=30&cd=30&stats=1
+ * ------------------------------------------------------------------ */
+const Q = new URLSearchParams(location.search);
+const SIZE = +(Q.get('size') || RING.size);
+const RING_R = +(Q.get('r') || RING.r);
+const FPS = +(Q.get('fps') || RING.fps);
+const COOLDOWN = (+(Q.get('cd') || 30)) * 1000;
+const STATS = Q.get('stats') === '1';
+
+const sc = SIZE / RING.size;
+const geom = {
+  size: SIZE, cx: SIZE / 2, cy: SIZE / 2, r: RING_R,
+  wRail: RING.wRail * sc, wTrack: RING.wTrack * sc,
+  rDeco: RING_R * (RING.rDeco / RING.r), wDeco: RING.wDeco * sc,
+  rDisc: RING_R * (RING.rDisc / RING.r),
+  canvas: Math.round(SIZE * 0.65), fps: FPS,
+};
+
+const stage  = document.getElementById('stage');
+const pctEl  = document.getElementById('pct');
+const subEl  = document.getElementById('sub');
+const floatEl = document.getElementById('float');
+const badgeEl = document.getElementById('badge');
+const blobEl = document.getElementById('blob');
+
+const ring = buildRing(document.getElementById('ring'), geom);
+const blob = new Blob(blobEl, geom);
+blobEl.style.width = geom.canvas + 'px';
+blobEl.style.height = geom.canvas + 'px';
+blob.setRunning(true);
+
+let memPct = 0, availMB = 0, commitPct = 0, cacheMB = 0;
+let live = false, busy = false, lastClean = 0, demoPct = 62;
+
+function render() {
+  const p = Math.max(0, Math.min(100, memPct));
+  ring.setPct(p);
+  pctEl.innerHTML = Math.round(p) + '<small>%</small>';
+  if (live) {
+    const warn = commitPct >= 85;
+    subEl.innerHTML = '可用 ' + (availMB / 1024).toFixed(1) + 'G' +
+      (warn ? ' · <b>提交 ' + commitPct.toFixed(0) + '%</b>' : '');
+    badgeEl.className = warn ? 'warn' : 'live';
+    badgeEl.title = warn ? '提交压力偏高' : '实时数据';
+  } else {
+    subEl.textContent = '演示数据';
+    badgeEl.className = 'demo';
+    badgeEl.title = '采集端未启动，当前是演示数据';
+  }
+}
+
+async function poll() {
+  const s = await apiSnapshot();
+  if (s && s.mem) {
+    live = true;
+    memPct = s.mem.pct || 0;
+    availMB = s.mem.avail_mb || 0;
+    commitPct = s.mem.commit_pct || 0;
+    cacheMB = s.mem.system_cache_mb || 0;
+  } else {
+    live = false;
+    demoPct = Math.max(6, Math.min(96, demoPct + (Math.random() - 0.5) * 1.4));
+    memPct = demoPct; availMB = (32 - 32 * memPct / 100) * 1024; commitPct = 0; cacheMB = 0;
+  }
+  if (!busy) render();
+}
+poll();
+setInterval(poll, 1000);
+
+function showFloat(text) {
+  floatEl.textContent = text;
+  floatEl.classList.add('on');
+  setTimeout(() => floatEl.classList.remove('on'), 1700);
+}
+
+/** 整理：环顺扫到 100% → 回落到目标值，同时粒子团被"吸"一下再回弹。
+ *  结果文案刻意写"整理 N GB 缓存页"而不是"释放内存"——待命列表/文件缓存被清掉后，
+ *  系统还会按需重新缓存回来。 */
+function doClean() {
+  if (busy) return;
+  const now = performance.now();
+  if (lastClean && now - lastClean < COOLDOWN) {
+    showFloat('冷却中 ' + Math.ceil((COOLDOWN - (now - lastClean)) / 1000) + 's');
+    return;
+  }
+  lastClean = now;
+  busy = true;
+  stage.classList.add('busy');
+  blob.pulse();
+
+  const from = memPct;
+  const target = Math.max(8, from - (6 + Math.random() * 10));
+  const freedGB = live && cacheMB ? (cacheMB * 0.35 / 1024) : (0.8 + Math.random() * 1.6);
+  const t0 = performance.now(), DUR = 900;
+  const step = () => {
+    const k = (performance.now() - t0) / DUR;
+    if (k >= 1) {
+      busy = false;
+      stage.classList.remove('busy');
+      render();
+      showFloat('演示：整理 ' + freedGB.toFixed(1) + ' GB 缓存页');
+      return;
+    }
+    let p;
+    if (k < 0.45) {
+      p = from + (100 - from) * (k / 0.45);
+    } else {
+      const u = (k - 0.45) / 0.55, e = 1 - Math.pow(1 - u, 3);
+      p = 100 + (target - 100) * e;
+    }
+    ring.setPct(p);
+    pctEl.innerHTML = Math.round(p) + '<small>%</small>';
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/* ---- 拖拽 vs 单击：4px 位移阈值（不能整个球铺 drag-region，那会吃掉单击） ---- */
+let down = null;
+stage.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  down = { x: e.screenX, y: e.screenY, drag: false };
+});
+window.addEventListener('mousemove', e => {
+  if (!down || down.drag) return;
+  if (Math.hypot(e.screenX - down.x, e.screenY - down.y) > 4) {
+    down.drag = true;
+    startDrag();
+  }
+});
+window.addEventListener('mouseup', e => {
+  if (!down) return;
+  const dragged = down.drag;
+  down = null;
+  if (!dragged && e.button === 0) doClean();
+});
+stage.addEventListener('dblclick', () => invokeCmd('open_panel'));
+stage.addEventListener('contextmenu', e => { e.preventDefault(); invokeCmd('open_panel'); });
+window.addEventListener('message', e => {              // dev.html 的"播放整理动画"
+  if (e.data && e.data.type === 'clean') { lastClean = 0; doClean(); }
+});
+
+/* ---- 开销观测：dev.html 加 ?stats=1 时把粒子团实际帧率回报出去 ---- */
+if (STATS) {
+  let lastFrames = blob.frames, lastT = performance.now();
+  setInterval(() => {
+    const t = performance.now();
+    const fps = (blob.frames - lastFrames) * 1000 / (t - lastT);
+    lastFrames = blob.frames; lastT = t;
+    if (window.parent !== window) window.parent.postMessage({ type: 'stats', fps }, '*');
+  }, 2000);
+}
+</script>
+</body>
+</html>

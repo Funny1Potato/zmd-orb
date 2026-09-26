@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>终末地加速球 · 任务管理器</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#f3f3f0;color:#4a4a46;
+            user-select:none;-webkit-user-select:none;
+            font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
+  #app{display:flex;flex-direction:column;height:100%;border:1px solid #dcdcd6;}
+  header{display:flex;align-items:center;gap:8px;height:38px;padding:0 6px 0 14px;
+         background:#e9e9e5;border-bottom:1px solid #dcdcd6;flex:none;}
+  header .title{font-size:13px;font-weight:600;letter-spacing:.3px;}
+  header .spacer{flex:1;height:100%;}
+  header button{height:24px;min-width:26px;border:0;border-radius:4px;background:transparent;color:#6a6a64;
+                font-size:12px;cursor:pointer;font-family:inherit;}
+  header button:hover{background:#dededa;color:#3a3a36;}
+  main{flex:1;padding:16px;overflow:auto;}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .card{background:#fff;border:1px solid #e4e4de;border-radius:8px;padding:12px 14px;}
+  .card .k{font-size:11px;color:#8b8b84;margin-bottom:6px;}
+  .card .v{font-size:20px;font-weight:600;color:#3f3f3a;}
+  .card .v.warn{color:#c2703a;}
+  .todo{margin-top:18px;background:#fff;border:1px solid #e4e4de;border-radius:8px;padding:14px 16px;}
+  .todo h2{margin:0 0 8px;font-size:13px;}
+  .todo p{margin:6px 0;font-size:12.5px;line-height:1.6;}
+  .muted,.todo .muted{color:#8b8b84;}
+  code{background:#f0f0ec;padding:1px 5px;border-radius:3px;font-size:12px;}
+  #accent{height:2px;background:#ffe23d;}
+</style>
+</head>
+<body>
+<div id="app">
+  <header data-tauri-drag-region>
+    <div class="title" data-tauri-drag-region>终末地加速球 · 任务管理器</div>
+    <div class="spacer" data-tauri-drag-region></div>
+    <button id="toBall" title="收起到球">收起到球</button>
+    <button id="quit" title="退出">✕</button>
+  </header>
+  <div id="accent"></div>
+  <main>
+    <section class="cards">
+      <div class="card"><div class="k">物理内存占用</div><div class="v" id="c_pct">—</div></div>
+      <div class="card"><div class="k">可用内存</div><div class="v" id="c_avail">—</div></div>
+      <div class="card"><div class="k">系统缓存</div><div class="v" id="c_cache">—</div></div>
+      <div class="card"><div class="k">提交额度</div><div class="v" id="c_commit">—</div></div>
+    </section>
+
+    <section class="todo">
+      <h2>M0 骨架</h2>
+      <p>这里现在是空壳。按计划：<b>M3</b> 加进程表（按 CPU/内存排序、搜索、结束进程），
+         <b>M1</b> 让"整理缓存页"真的生效（三级档位 + 前后测量），<b>M4</b> 接托盘与开机自启。</p>
+      <p class="muted">数据来自本地采集端 <code>127.0.0.1:8910</code>，每秒刷新。<span id="state"></span></p>
+    </section>
+  </main>
+</div>
+<script src="api.js"></script>
+<script>
+const E = id => document.getElementById(id);
+let warned = false;
+
+function set(id, text, warn) {
+  const el = E(id);
+  el.textContent = text;
+  el.classList.toggle('warn', !!warn);
+}
+
+async function poll() {
+  const s = await apiSnapshot();
+  if (!s || !s.mem) {
+    E('state').textContent = '（采集端未启动）';
+    return;
+  }
+  const m = s.mem;
+  set('c_pct', m.pct.toFixed(1) + '%', m.pct >= 88);
+  set('c_avail', (m.avail_mb / 1024).toFixed(1) + ' GB');
+  set('c_cache', m.system_cache_mb ? (m.system_cache_mb / 1024).toFixed(2) + ' GB' : '—');
+  if (m.commit_limit_mb) {
+    warned = m.commit_pct >= 85;
+    set('c_commit', (m.committed_mb / 1024).toFixed(1) + ' / ' + (m.commit_limit_mb / 1024).toFixed(1) +
+        ' GB · ' + m.commit_pct.toFixed(0) + '%', warned);
+  }
+  E('state').textContent = warned ? '提交压力偏高（本机页面文件小，注意 JVM/大程序）' : '实时';
+}
+poll();
+setInterval(poll, 1000);
+
+E('toBall').onclick = () => invokeCmd('close_panel');
+E('quit').onclick = () => invokeCmd('quit_app');
+window.addEventListener('keydown', e => { if (e.key === 'Escape') invokeCmd('close_panel'); });
+</script>
+</body>
+</html>

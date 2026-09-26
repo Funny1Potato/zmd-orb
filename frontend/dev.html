@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>zmd-orb · 前端精修页</title>
+<style>
+  html,body{margin:0;height:100%;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+            background:#23231f;color:#d8d8d0;}
+  #wrap{display:flex;height:100%;}
+  #side{width:300px;flex:none;padding:16px;box-sizing:border-box;background:#1c1c19;overflow:auto;}
+  h1{font-size:14px;margin:0 0 4px;}
+  .hint{font-size:11.5px;color:#8d8d84;line-height:1.6;margin:0 0 14px;}
+  label{display:block;font-size:12px;margin:12px 0 4px;color:#b9b9b0;}
+  select,button{width:100%;height:30px;border-radius:5px;border:1px solid #3a3a34;background:#26261f;
+                color:#d8d8d0;font-family:inherit;font-size:12.5px;padding:0 8px;box-sizing:border-box;}
+  button{cursor:pointer;margin-top:8px;}
+  button:hover{background:#32322a;border-color:#4c4c42;}
+  button.primary{background:#3a3a26;border-color:#6a6a40;color:#ffe23d;font-weight:600;}
+  #stats{margin-top:16px;font-size:12px;line-height:1.7;color:#a9a9a0;}
+  #stats b{color:#ffe23d;font-weight:600;}
+  #stageArea{flex:1;display:flex;align-items:center;justify-content:center;position:relative;}
+  #stageArea.checker{background-image:
+      linear-gradient(45deg,#2a2a26 25%,transparent 25%,transparent 75%,#2a2a26 75%),
+      linear-gradient(45deg,#2a2a26 25%,transparent 25%,transparent 75%,#2a2a26 75%);
+      background-size:16px 16px;background-position:0 0,8px 8px;background-color:#3a3a34;}
+  #stageArea.dark{background:#111110;}
+  #stageArea.light{background:#f0f0ec;}
+  #frameBox{transform-origin:50% 50%;}
+  iframe{border:0;display:block;background:transparent;}
+  .note{margin-top:14px;font-size:11px;color:#7d7d74;line-height:1.6;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="side">
+    <h1>球的前端精修页</h1>
+    <p class="hint">本机没有 Rust 工具链，壳要在 CI 上编译。所以环、粒子团、动画都在这里调完再上 CI。
+      球的几何常量在 <code>ring.js</code> 的 <code>RING</code> 里。</p>
+
+    <label>背景（透明底才看得准）</label>
+    <select id="bg">
+      <option value="checker">棋盘（模拟透明）</option>
+      <option value="dark">深色</option>
+      <option value="light">浅色</option>
+    </select>
+
+    <label>显示倍率</label>
+    <select id="zoom">
+      <option value="1">100%（真实尺寸）</option>
+      <option value="2">200%</option>
+      <option value="3">300%</option>
+      <option value="1.5">150%</option>
+    </select>
+
+    <label>粒子团帧率</label>
+    <select id="fps">
+      <option value="30">30 fps（默认）</option>
+      <option value="60">60 fps</option>
+      <option value="15">15 fps（低功耗）</option>
+    </select>
+
+    <label>整理冷却</label>
+    <select id="cd">
+      <option value="2">2 秒（方便连点看动画）</option>
+      <option value="30">30 秒（正式）</option>
+    </select>
+
+    <button class="primary" id="play">▶ 播放整理动画</button>
+    <button id="reload">重新加载球</button>
+
+    <div id="stats">粒子团实测帧率：<b id="fpsv">—</b><br>
+      数据来源：<b id="src">—</b></div>
+    <p class="note">"整理"在 M0 是演示动画，真的清理接口在 M1。右下角指示点：绿=实时、黄=演示数据。</p>
+  </div>
+  <div id="stageArea" class="checker">
+    <div id="frameBox"><iframe id="ball" src="" width="160" height="160" title="ball"></iframe></div>
+  </div>
+</div>
+<script src="api.js"></script>
+<script>
+const E = id => document.getElementById(id);
+const SIZE = 160;
+let lastStatsAt = 0;
+
+function rebuild() {
+  const fps = E('fps').value, cd = E('cd').value;
+  E('frameBox').style.transform = 'scale(' + E('zoom').value + ')';
+  E('ball').src = 'ball.html?fps=' + fps + '&cd=' + cd + '&stats=1&t=' + Date.now();
+}
+
+E('bg').onchange = () => { E('stageArea').className = E('bg').value; };
+E('zoom').onchange = () => { E('frameBox').style.transform = 'scale(' + E('zoom').value + ')'; };
+E('fps').onchange = rebuild;
+E('cd').onchange = rebuild;
+E('reload').onclick = rebuild;
+E('play').onclick = () => E('ball').contentWindow.postMessage({ type: 'clean' }, '*');
+
+window.addEventListener('message', e => {
+  if (e.data && e.data.type === 'stats') {
+    E('fpsv').textContent = e.data.fps.toFixed(1) + ' fps';
+    lastStatsAt = Date.now();
+  }
+});
+
+/* 顺带看一眼采集端在不在（不在就是演示数据） */
+setInterval(async () => {
+  const h = await apiHealth();
+  E('src').textContent = h && h.ready ? '采集端实时数据' : (h ? '采集端已启动、采样中' : '采集端未启动（演示数据）');
+}, 2000);
+
+rebuild();
+</script>
+</body>
+</html>

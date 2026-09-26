@@ -1,0 +1,17 @@
+# Rust / Tauri
+tauri/src-tauri/target/
+tauri/src-tauri/gen/
+
+# CI 把 PyInstaller 产物拷到这里当 Tauri 资源，属构建产物
+tauri/src-tauri/backend.exe
+
+# Python
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.spec
+
+# 本地临时/工具
+.qwen/
+*.log
