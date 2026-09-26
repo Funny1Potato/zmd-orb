@@ -349,12 +349,10 @@
 
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
                       shell:WindowChrome.IsHitTestVisibleInChrome="True">
-            <TextBlock x:Name="adminHint" FontSize="11.5" Foreground="{StaticResource InkDim}"
-                       VerticalAlignment="Center" Margin="0,0,10,0"/>
-            <Button x:Name="ToBall" Content="收起到球" Style="{StaticResource GhostBtn}" Height="30"
-                    Padding="12,0" Click="ToBall_Click"/>
-            <Button x:Name="QuitBtn" Content="✕" Style="{StaticResource RoundBtn}" Margin="10,0,0,0"
-                    Click="Quit_Click"/>
+            <Button x:Name="QuitBtn" Content="关闭程序" Style="{StaticResource GhostBtn}" Height="30"
+                    Padding="12,0" Click="Quit_Click"/>
+            <Button x:Name="ToBall" Content="✕" Style="{StaticResource RoundBtn}" Margin="10,0,0,0"
+                    Click="ToBall_Click" ToolTip="收起到球（不退出程序）"/>
           </StackPanel>
         </Grid>
       </Border>
@@ -743,6 +741,8 @@
               <CheckBox x:Name="AutoChk" Content="自动整理（免提权，低水位时做轻度）" FontSize="12.5"
                         Foreground="{StaticResource Ink}" VerticalAlignment="Center" Margin="16,0,0,0"
                         Cursor="Hand" Click="Auto_Click"/>
+              <TextBlock x:Name="adminHint" FontSize="11.5" Foreground="{StaticResource InkDim}"
+                         VerticalAlignment="Center" Margin="16,0,0,0"/>
             </StackPanel>
             <TextBlock x:Name="statusLine" Margin="0,10,0,0" FontSize="12.5"
                        Foreground="{StaticResource Ink}" TextWrapping="Wrap" LineHeight="19"/>
