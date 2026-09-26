@@ -8,7 +8,7 @@
             user-select:none;-webkit-user-select:none;
             font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;}
   #stage{position:relative;width:100%;height:100%;transition:transform .16s ease;transform-origin:50% 50%;}
-  #stage:hover{transform:scale(1.05);}
+  #stage.hover{transform:scale(1.05);}
   #stage.busy{transform:scale(1.09);}
   svg{position:absolute;inset:0;}
   #blob{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);}
@@ -158,6 +158,11 @@ function doClean() {
   requestAnimationFrame(step);
 }
 
+/* 悬停用类控制而不是 :hover —— 走系统原生拖动时 WebView2 收不到 mouseleave，
+   :hover 会卡在"放大 1.05"状态；用类就能在拖动开始/结束时显式清掉。 */
+stage.addEventListener('mouseenter', () => stage.classList.add('hover'));
+stage.addEventListener('mouseleave', () => stage.classList.remove('hover'));
+
 /* ---- 拖拽 vs 单击：4px 位移阈值（不能整个球铺 drag-region，那会吃掉单击） ---- */
 let down = null;
 stage.addEventListener('mousedown', e => {
@@ -168,6 +173,7 @@ window.addEventListener('mousemove', e => {
   if (!down || down.drag) return;
   if (Math.hypot(e.screenX - down.x, e.screenY - down.y) > 4) {
     down.drag = true;
+    stage.classList.remove('hover');      // 拖动开始就收掉悬停放大
     startDrag();
   }
 });
@@ -203,6 +209,7 @@ if (inShell()) {
         await invokeCmd('refresh_ball_window');
       } else if (!settled && now - changedAt > 500) {
         settled = true;
+        stage.classList.remove('hover');   // 拖动结束再兜一次，避免 hover 卡住
         await invokeCmd('end_drag_cleanup');
       }
     } catch (e) { /* 拿不到就算了，不影响使用 */ }
