@@ -24,10 +24,11 @@ public partial class BallWindow : Window
 
     static readonly Brush Ink = Frozen("#4a4a46");   // 有实时数据
     static readonly Brush Dim = Frozen("#a2a29b");   // 回落演示数据：数字调暗，免得把编的数值当真
+    static readonly Brush Warn = Frozen("#c2703a");  // 提交额度 ≥85%：真会把程序打崩的东西，给数字换色
 
     // 取数状态
     bool _live;
-    double _memPct;
+    double _memPct, _commitPct;
     double _demoPct = 62;
     bool _polling;
 
@@ -92,25 +93,27 @@ public partial class BallWindow : Window
             {
                 _live = true;
                 _memPct = s.Pct;
+                _commitPct = s.CommitPct;
             }
             else
             {
                 _live = false;
                 _demoPct = Math.Max(6, Math.Min(96, _demoPct + (Random.Shared.NextDouble() - 0.5) * 1.4));
                 _memPct = _demoPct;
+                _commitPct = 0;
             }
             if (!_busy) Render();
         }
         finally { _polling = false; }
     }
 
-    /// <summary>球面只显示占用率一个数（原来的"可用 xx G / 提交 xx%"那行太小看不清，去掉了）。</summary>
+    /// <summary>球面只显示占用率一个数；提交额度逼近上限时这个数换色，不再用一行小字去说明。</summary>
     void Render()
     {
         double p = Math.Max(0, Math.Min(100, _memPct));
         Visual.Pct = p;
         PctNum.Text = Math.Round(p).ToString();
-        PctText.Foreground = _live ? Ink : Dim;
+        PctText.Foreground = !_live ? Dim : _commitPct >= 85 ? Warn : Ink;
     }
 
     /* ---------------- 帧循环（30fps 封顶） ---------------- */
@@ -140,6 +143,8 @@ public partial class BallWindow : Window
     }
 
     /* ---------------- 单击：真的整理（M1，轻度档） ---------------- */
+
+    string _pendingFloat = "";
 
     async void DoClean()
     {
@@ -176,9 +181,15 @@ public partial class BallWindow : Window
             Target = double.IsNaN(res.PctAfter) ? _memPct : res.PctAfter,
             T0 = _now,
         };
-        // 整理成功不再弹文案：球窗口只有 160px，短文案也读不清，明细留给面板与日志
+        // 整理结果照旧弹字（带深色底，12pt，见 FloatBox）；口径与明细在日志/面板里
+        _pendingFloat = BallLine(res);
         Diag.Log($"整理完成 {res.Tier}：{res.Summary}｜{res.Detail}");
     }
+
+    /// <summary>球上的短文案。球窗口只有 160px 宽，长文案会被裁掉，明细留给面板。</summary>
+    static string BallLine(CleanResult r) => r.Tier == "l1"
+        ? "换出 " + r.MovedGb.ToString("F1") + "G 工作集"
+        : "整理 " + r.PurgedGb.ToString("F1") + "G 缓存页";
 
     void ResetAnim(string text)
     {
@@ -211,6 +222,7 @@ public partial class BallWindow : Window
             Visual.SetBreathe(1, 1);
             Render();                              // 落回真实占用（真实值已在 DoClean 里更新过）
             ScaleTo(_hover ? 1.05 : 1, 160);
+            ShowFloat(_pendingFloat);
             return;
         }
         double e = 1 - Math.Pow(1 - k2, 3);
