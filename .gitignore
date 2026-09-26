@@ -1,9 +1,9 @@
-# Rust / Tauri
-tauri/src-tauri/target/
-tauri/src-tauri/gen/
+# WPF 壳的构建产物
+orb/bin/
+orb/obj/
 
-# CI 把 PyInstaller 产物拷到这里当 Tauri 资源，属构建产物
-tauri/src-tauri/backend.exe
+# CI 把 PyInstaller 产物拷到这里，随发布目录一起落地，属构建产物
+orb/backend.exe
 
 # Python
 __pycache__/

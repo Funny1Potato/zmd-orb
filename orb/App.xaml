@@ -1,0 +1,12 @@
+<Application x:Class="ZmdOrb.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+  <!-- 球的"右键/双击 → 面板"是常驻的，退出只由面板的 ✕ 触发，所以关窗不等于退出 -->
+  <Application.Resources>
+    <SolidColorBrush x:Key="Ink" Color="#4a4a46"/>
+    <SolidColorBrush x:Key="InkDim" Color="#8b8b84"/>
+    <SolidColorBrush x:Key="Warn" Color="#c2703a"/>
+    <SolidColorBrush x:Key="Line" Color="#dcdcd6"/>
+  </Application.Resources>
+</Application>

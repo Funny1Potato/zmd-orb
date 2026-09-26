@@ -1,0 +1,132 @@
+<Window x:Class="ZmdOrb.PanelWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="终末地加速球 · 任务管理器"
+        Width="900" Height="620" MinWidth="720" MinHeight="480"
+        WindowStyle="None" ResizeMode="CanResize" Background="#f3f3f0"
+        WindowStartupLocation="CenterScreen" ShowActivated="True"
+        FontFamily="Segoe UI, Microsoft YaHei" TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+
+  <!-- 面板不透明，不需要透明层：文字走硬件加速更清晰。顶栏当标题栏用（可拖拽/双击最大化），
+       里面的按钮要显式声明在 chrome 里可点。 -->
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="38" ResizeBorderThickness="6" CornerRadius="0"
+                        GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+
+  <Window.Resources>
+    <Style x:Key="HeadBtn" TargetType="Button">
+      <Setter Property="Foreground" Value="#6a6a64"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Height" Value="24"/>
+      <Setter Property="MinWidth" Value="26"/>
+      <Setter Property="Padding" Value="8,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bg" Background="{TemplateBinding Background}" CornerRadius="4"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bg" Property="Background" Value="#dededa"/>
+                <Setter Property="Foreground" Value="#3a3a36"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="CardKey" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="Foreground" Value="#8b8b84"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style x:Key="CardVal" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="20"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="#3f3f3a"/>
+    </Style>
+  </Window.Resources>
+
+  <Border BorderBrush="#dcdcd6" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="38"/>
+        <RowDefinition Height="2"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+
+      <Border Grid.Row="0" Background="#e9e9e5" BorderBrush="#dcdcd6" BorderThickness="0,0,0,1">
+        <Grid>
+          <TextBlock Text="终末地加速球 · 任务管理器" VerticalAlignment="Center" Margin="14,0,0,0"
+                     FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                      Margin="0,0,6,0" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Button x:Name="ToBall" Content="收起到球" Style="{StaticResource HeadBtn}" Click="ToBall_Click"/>
+            <Button x:Name="QuitBtn" Content="✕" Style="{StaticResource HeadBtn}" Click="Quit_Click"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Rectangle Grid.Row="1" Fill="#ffe23d"/>
+
+      <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="16">
+          <UniformGrid Columns="4">
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="物理内存占用" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cPct" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="可用内存" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cAvail" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="系统缓存" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cCache" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="提交额度" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cCommit" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+          </UniformGrid>
+
+          <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                  Margin="5,18,5,5" Padding="16,14">
+            <StackPanel>
+              <TextBlock Text="M0 骨架" FontSize="13" FontWeight="SemiBold" Foreground="#4a4a46"/>
+              <TextBlock Margin="0,8,0,0" FontSize="12.5" TextWrapping="Wrap" Foreground="#4a4a46"
+                         LineHeight="20">
+                这里现在是空壳。按计划：<Run FontWeight="SemiBold">M3</Run> 加进程表（按 CPU/内存排序、搜索、结束进程），
+                <Run FontWeight="SemiBold">M1</Run> 让"整理缓存页"真的生效（三级档位 + 前后测量），
+                <Run FontWeight="SemiBold">M4</Run> 接托盘与开机自启。
+              </TextBlock>
+              <TextBlock x:Name="stateLine" Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84"
+                         TextWrapping="Wrap"/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+  </Border>
+</Window>

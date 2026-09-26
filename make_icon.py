@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """生成 zmd-orb 的图标：透明背景 + 电量环（灰衬环 + 淡黄轨道 + 亮黄进度弧）。
 
-产物（tauri/src-tauri/icons/）：
-    32x32.png / 128x128.png / 128x128@2x.png / icon.ico
+产物（orb/）：
+    icon.ico（WPF 用 ApplicationIcon）/ 32x32.png / 128x128.png / 128x128@2x.png（留给安装包）
 
 用法：python make_icon.py
 """
@@ -10,7 +10,7 @@ import os
 
 from PIL import Image, ImageDraw
 
-OUT = os.path.join("tauri", "src-tauri", "icons")
+OUT = os.path.join("orb")
 S = 256
 GREY = (211, 211, 206, 255)   # 灰衬环 #d3d3ce
 TRACK = (242, 237, 196, 255)  # 淡黄轨道 #f2edc4

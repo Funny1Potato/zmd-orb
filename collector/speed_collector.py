@@ -4,8 +4,8 @@
 依赖：pip install psutil
 运行：python collector/speed_collector.py [--no-gui | --selftest]
 对外：http://127.0.0.1:8910/snapshot   内存/CPU 快照（JSON，带 CORS）
-      http://127.0.0.1:8910/health     健康检查（壳/前端探活用）
-      http://127.0.0.1:8910/ball.html  顺带伺服前端静态页（浏览器里精修 UI 用）
+      http://127.0.0.1:8910/health     健康检查（壳启动前探活用：是我们的采集端就直接复用）
+      http://127.0.0.1:8910/dev.html   顺带伺服 frontend/ 静态页（只是设计参考，调色用）
 
 M0 只输出只读数据：物理内存 / 提交额度 / 系统缓存 / CPU。
 M1 会加：POST /clean（三级整理缓存页）、POST /kill、GET /clean/result。

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>10.0</LangVersion>
+    <AssemblyName>zmd-orb</AssemblyName>
+    <RootNamespace>ZmdOrb</RootNamespace>
+    <ApplicationIcon>icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 只有中文一种语言，别让 SDK 生成一堆卫星资源目录 -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <AssemblyTitle>终末地加速球</AssemblyTitle>
+    <Product>终末地加速球</Product>
+    <Version>0.0.1</Version>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <!-- 采集端：CI 会先把 PyInstaller 产物放到 orb/backend.exe，随发布目录一起落地 -->
+  <ItemGroup>
+    <None Include="backend.exe" Condition="Exists('backend.exe')"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
