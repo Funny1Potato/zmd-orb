@@ -63,6 +63,28 @@ fn refresh_ball_window(app: tauri::AppHandle) {
     }
 }
 
+/// 拖动结束后调用：隐藏 → 显示 → 强制重绘。
+/// 为什么必须这么重：窗口一旦移动，WebView2 那层的合成表面会留下旧帧（实机表现是一块浅色/描边色的
+/// 残留，被圆形区域裁成弧边）。实测窗口级手段都清不掉它——InvalidateRect+UpdateWindow、RedrawWindow
+/// (含 RDW_ALLCHILDREN)、直接无效化 WRY_WEBVIEW 子窗口、尺寸抖 1px、Z 序翻转，残留计数纹丝不动；
+/// 只有把窗口的显示状态重建一次（hide+show）才回到 0，与"全新实例本来就是 0"一致。
+#[tauri::command]
+fn end_drag_cleanup(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        if let Some(ball) = app.get_webview_window("ball") {
+            let _ = ball.hide();
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            let _ = ball.show();
+            force_repaint(&ball, "end-drag");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
 /// 强杀 backend 进程树。PyInstaller onefile 会 fork 子进程承载实际逻辑，
 /// 只 kill 直接子进程会留下孤儿 python 继续占 8910，故用 taskkill /T。
 fn kill_backend(child: &mut Child) {
@@ -309,7 +331,8 @@ fn main() {
             open_panel,
             close_panel,
             set_ball_visible,
-            refresh_ball_window
+            refresh_ball_window,
+            end_drag_cleanup
         ])
         .build(tauri::generate_context!())
         .expect("error building app")

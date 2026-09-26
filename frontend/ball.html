@@ -183,19 +183,28 @@ window.addEventListener('message', e => {              // dev.html 的"播放整
   if (e.data && e.data.type === 'clean') { lastClean = 0; doClean(); }
 });
 
-/* ---- 窗口移动后透明会失效：轮询位置，发现变动就让壳强制重绘一次 ----
+/* ---- 窗口移动后透明会失效：轮询位置，边动边重绘、停下后重建显示状态 ----
    拖拽走的是系统原生拖动（startDragging），拖完 JS 收不到可靠的 mouseup，
-   所以只能靠轮询位置来发现「移动了」。400ms 一次，开销可忽略。 */
+   所以只能靠轮询位置来发现「移动了」。
+   移动中：每次变动请求一次重绘（减轻过程观感）；
+   停止后（500ms 无变动）：hide+show 重建一次（窗口级重绘清不掉 WebView2 那层的旧帧）。 */
 if (inShell()) {
-  let lastPos = null;
+  let lastPos = null, changedAt = 0, settled = true;
   setInterval(async () => {
     const w = tauriWindow();
     if (!w || !w.outerPosition) return;
     try {
       const p = await w.outerPosition();
       const key = p.x + ',' + p.y;
-      if (lastPos !== null && key !== lastPos) await invokeCmd('refresh_ball_window');
-      lastPos = key;
+      const now = Date.now();
+      if (lastPos === null) { lastPos = key; return; }
+      if (key !== lastPos) {
+        lastPos = key; changedAt = now; settled = false;
+        await invokeCmd('refresh_ball_window');
+      } else if (!settled && now - changedAt > 500) {
+        settled = true;
+        await invokeCmd('end_drag_cleanup');
+      }
     } catch (e) { /* 拿不到就算了，不影响使用 */ }
   }, 400);
 }
