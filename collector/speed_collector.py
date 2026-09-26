@@ -309,6 +309,7 @@ def top_apps(rows):
     "显示几条（app_limit）"与"按哪列排"都由面板决定。
     """
     keep = [p for p in rows if p["pid"] != 0
+            and (p.get("name") or "").lower() not in NON_APP_NAMES
             and not (p["cpu"] < PROC_MIN_CPU and p["mem_mb"] < PROC_MIN_MB)]
     keep.sort(key=lambda p: (-p["cpu"], -p["mem_mb"]))
     return [{"pid": p["pid"], "name": p["name"], "exe": "",
@@ -1244,6 +1245,10 @@ APP_SEND_MAX = 400      # 应用概况候选集上限（面板要支持按内存
 # 之前是 cpu<0.5% 且 mem<40MB —— 实测在空闲机器上只剩 30 个进程 / 24 个应用，
 # 导致"应用内存"页几乎看不到应用；改成 0.1%/8MB 后是 153 个进程 / 87 个应用。
 PROC_MIN_CPU, PROC_MIN_MB = 0.1, 8.0
+# 不算"应用"的系统条目：已压缩内存（Memory Compression / 老版本的 MemCompression）。
+# 它不是一个真实应用，工作集就是压缩池本身（本机常态 2 GB 上下），单列出来等于把内存占用算重；
+# 任务管理器里它也只是内存页上的"已压缩"数字，不出现在进程列表里。
+NON_APP_NAMES = {"memory compression", "memcompression"}
 SUB_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5",
             27: "LPDDR", 28: "LPDDR2", 29: "LPDDR3", 30: "LPDDR4", 35: "LPDDR5"}
