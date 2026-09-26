@@ -35,19 +35,22 @@ sealed class MemSnapshot
 
 sealed class CpuInfo
 {
-    public string Name = ""; public double Threads, Util, Freq, Base, Max;
+    public string Name = "", Full = "";
+    public double Cores, Threads, Util, Freq, Base, Max, SeenMax, PerfPct;
 }
 
 sealed class GpuInfo
 {
-    public string Name = ""; public double Util, Freq = double.NaN, MemUsed = double.NaN, MemTotal;
+    public string Name = "", Full = "";
+    public double Util, Freq = double.NaN, MemUsed = double.NaN, MemTotal;
     public bool Ok;
 }
 
 sealed class MemInfo
 {
     public double UsedGb, TotalGb, Pct, FreeZeroMb, StandbyMb, CommittedGb, CommitLimitGb;
-    public string Speed = "", Type = "";
+    public string Speed = "", Type = "", Part = "", Vendor = "";
+    public double Modules, PerGb;
 }
 
 sealed class DiskInfo
@@ -58,7 +61,8 @@ sealed class DiskInfo
 
 sealed class NetInfo
 {
-    public string Name = ""; public double Down, Up, Link, Util;
+    public string Name = "", Desc = "";
+    public double Down, Up, Link, Util;
 }
 
 /// <summary>应用概况列表里的一项。</summary>
@@ -308,16 +312,19 @@ static class MemoryApi
             {
                 s.Cpu = new CpuInfo
                 {
-                    Name = Str(cp, "name"), Threads = Num(cp, "threads"), Util = Num(cp, "util"),
-                    Freq = Num(cp, "freq"), Base = Num(cp, "base"), Max = Num(cp, "max"),
+                    Name = Str(cp, "name"), Full = Str(cp, "full"), Cores = Num(cp, "cores"),
+                    Threads = Num(cp, "threads"), Util = Num(cp, "util"), Freq = Num(cp, "freq"),
+                    Base = Num(cp, "base"), Max = Num(cp, "max"), SeenMax = Num(cp, "seen_max"),
+                    PerfPct = NumOrNaN(cp, "perf_pct"),
                 };
             }
             if (root.TryGetProperty("gpu", out var g))
             {
                 s.Gpu = new GpuInfo
                 {
-                    Name = Str(g, "name"), Util = Num(g, "util"), Freq = NumOrNaN(g, "freq"),
-                    MemUsed = NumOrNaN(g, "mem_used"), MemTotal = Num(g, "mem_total"),
+                    Name = Str(g, "name"), Full = Str(g, "full"), Util = Num(g, "util"),
+                    Freq = NumOrNaN(g, "freq"), MemUsed = NumOrNaN(g, "mem_used"),
+                    MemTotal = Num(g, "mem_total"),
                     Ok = g.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.True,
                 };
             }
@@ -327,14 +334,15 @@ static class MemoryApi
                 FreeZeroMb = Num(m, "free_zero_mb"), StandbyMb = Num(m, "standby_mb"),
                 CommittedGb = Num(m, "committed_mb") / 1024.0,
                 CommitLimitGb = Num(m, "commit_limit_mb") / 1024.0,
-                Speed = Str(m, "speed"), Type = Str(m, "type"),
+                Speed = Str(m, "speed"), Type = Str(m, "type"), Modules = Num(m, "modules"),
+                PerGb = Num(m, "per_gb"), Part = Str(m, "part"), Vendor = Str(m, "vendor"),
             };
             if (root.TryGetProperty("net", out var nt))
             {
                 s.Net = new NetInfo
                 {
-                    Name = Str(nt, "name"), Down = Num(nt, "down"), Up = Num(nt, "up"),
-                    Link = Num(nt, "link"), Util = Num(nt, "util"),
+                    Name = Str(nt, "name"), Desc = Str(nt, "desc"), Down = Num(nt, "down"),
+                    Up = Num(nt, "up"), Link = Num(nt, "link"), Util = Num(nt, "util"),
                 };
             }
             if (root.TryGetProperty("disks", out var dk) && dk.ValueKind == JsonValueKind.Array)

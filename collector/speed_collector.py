@@ -56,8 +56,9 @@ ELEVATE_WAIT = 90.0  # 等用户点 UAC 的最长时间（秒）
 state = {"snapshot": None, "last_result": None, "last_clean": 0.0, "cleaning": False,
          "fault_rate": None, "auto": {}, "auto_checked": 0.0, "auto_last": 0.0,
          "auto_count": 0, "auto_reason": "", "stat": {}, "procs": None, "procs_dt": None,
-         "procs_ts": 0.0}
-_fault = None        # PdhRate，main() 里创建（硬缺页率采样器）
+         "procs_ts": 0.0, "cpu_perf": None, "cpu_seen_max": 0.0}
+_fault = None        # PdhRate，硬缺页率采样器（main() 里创建）
+_cpu_perf = None     # PdhRate，% Processor Performance（用于推算 CPU 实时频率）
 ntdll = ctypes.WinDLL("ntdll")
 
 SystemMemoryListInformation = 0x50
@@ -330,12 +331,16 @@ def build_snapshot(mem, rows):
     up = max(0.0, (net.bytes_sent - pn.bytes_sent) * 8 / 1e6 / dt)
     link = stat.get("net_link", 1000) or 1000
 
-    try:
-        f = psutil.cpu_freq()
-        freq = round((f.current or 0) / 1000.0, 2) if f else 0.0
-    except Exception:
-        freq = 0.0
     cpu_util = psutil.cpu_percent(None)
+
+    # CPU 实时频率：psutil.cpu_freq() 在 Windows 上只会回 MaxClockSpeed（实测恒为 3.80GHz，是静态值），
+    # 所以用"性能计数器 % Processor Performance × 基准频率"来推算（实测 109% × 3801MHz ≈ 4147MHz，
+    # 与 CIM/WMI 的另一路读数一致）。
+    base_ghz = stat.get("cpu_base") or stat.get("cpu_max") or 0.0
+    perf = state.get("cpu_perf")
+    freq = round(base_ghz * perf / 100.0, 2) if (base_ghz and perf) else (stat.get("cpu_max") or 0.0)
+    if freq and freq > state.get("cpu_seen_max", 0.0):
+        state["cpu_seen_max"] = freq
 
     # 硬盘：占用率优先用性能计数器，读写速率用计数器或 psutil 字节差兜底
     try:
@@ -360,7 +365,7 @@ def build_snapshot(mem, rows):
             "name": "磁盘 %d (%s)" % (i, d["letter"]),
             "used": round(u.used / 2 ** 30, 1), "total": round(u.total / 2 ** 30, 1),
             "pct": round(u.percent, 1),
-            "util": round(active, 1) if active is not None else round(u.percent, 1),
+            "util": round(active, 1) if active is not None else 0.0,
             "rw": "%.0f MB/s" % rw, "media": d["media"], "model": d["model"],
         })
 
@@ -371,18 +376,25 @@ def build_snapshot(mem, rows):
         "admin": is_admin(),                       # 壳/面板据此提示"深度整理需要管理员"
         "hard_fault_rate": state.get("fault_rate"),
         "auto": auto_status(),
-        "cpu": {"name": stat.get("cpu_name"), "threads": stat.get("cpu_threads"),
+        "cpu": {"name": stat.get("cpu_name"), "full": stat.get("cpu_full"),
+                "cores": stat.get("cpu_cores"), "threads": stat.get("cpu_threads"),
                 "util": round(cpu_util, 1), "freq": freq,
-                "base": stat.get("cpu_base"), "max": stat.get("cpu_max")},
-        "gpu": {"name": stat.get("gpu_name"), "util": round(g.get("util", 0), 1),
+                "base": base_ghz, "max": stat.get("cpu_max"),
+                "seen_max": round(state.get("cpu_seen_max", 0.0), 2),
+                "perf_pct": round(perf, 1) if perf else None},
+        "gpu": {"name": stat.get("gpu_name"), "full": stat.get("gpu_full"),
+                "util": round(g.get("util", 0), 1),
                 "freq": g.get("freq"), "mem_used": g.get("mem_used"),
                 "mem_total": stat.get("gpu_mem_total"), "ok": bool(g.get("ok"))},
         "mem": dict(mem,
                     used=round(vm.used / 2 ** 30, 1), total=round(vm.total / 2 ** 30, 1),
                     pct=round(vm.percent, 1), speed=stat.get("mem_speed"),
-                    type=stat.get("mem_type")),
+                    type=stat.get("mem_type"), modules=stat.get("mem_modules"),
+                    per_gb=stat.get("mem_per_gb"), part=stat.get("mem_part"),
+                    vendor=stat.get("mem_vendor")),
         "disks": disks,
-        "net": {"name": stat.get("net_name"), "down": round(down, 2), "up": round(up, 2),
+        "net": {"name": stat.get("net_name"), "desc": stat.get("net_desc"),
+                "down": round(down, 2), "up": round(up, 2),
                 "link": link, "util": round(min(100.0, max(down, up) / link * 100), 1)},
         "procs": top_apps(rows),
     }
@@ -395,6 +407,10 @@ def sampler():
             mem = read_memory() or {}
             if _fault is not None:
                 state["fault_rate"] = _fault.sample()
+            if _cpu_perf is not None:          # 用于推算 CPU 实时频率
+                v = _cpu_perf.sample()
+                if v is not None:
+                    state["cpu_perf"] = v
             rows = sample_procs()
             state["snapshot"] = build_snapshot(mem, rows)
             auto_tick()                       # 自动整理（默认关；只做免提权的 l1）
@@ -1224,7 +1240,8 @@ SLOW_INTERVAL = 1.5     # 慢速采样（显卡 / 硬盘性能计数器）
 PROC_LIMIT = 40         # 应用概况默认显示条数（面板可改，见 app_limit）
 APP_SEND_MAX = 200      # 应用概况候选集上限（面板要支持按内存/名称排序，所以不能只发 CPU 前 N）
 SUB_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5"}
+MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5",
+            27: "LPDDR", 28: "LPDDR2", 29: "LPDDR3", 30: "LPDDR4", 35: "LPDDR5"}
 _meta = {}              # pid -> {desc, title} 应用名缓存（照搬参考的缓存策略）
 
 
@@ -1257,14 +1274,27 @@ def as_list(j):
     return j if isinstance(j, list) else [j]
 
 
+def tidy_name(s):
+    """把厂商串里的商标后缀去掉，让"设备名称"能塞进面板那一列（原始串仍保留在详情里）。"""
+    s = s or ""
+    for junk in ("(TM)", "(R)", "(tm)", "(r)"):
+        s = s.replace(junk, "")
+    if " w/ " in s:
+        s = s.split(" w/ ")[0]          # "AMD Ryzen 7 7840H w/ Radeon 780M Graphics" → 前半
+    return " ".join(s.split()).strip()
+
+
 def collect_static():
     """CPU / 内存条 / 显卡 / 网卡 / 硬盘映射 —— 只在启动时取一次。"""
     s = {}
     cpu = as_list(_ps_json("Get-CimInstance Win32_Processor | "
-                           "Select-Object Name,MaxClockSpeed,NumberOfLogicalProcessors"))
+                           "Select-Object Name,MaxClockSpeed,NumberOfCores,NumberOfLogicalProcessors"))
     cpu = cpu[0] if cpu else {}
-    s["cpu_name"] = (cpu.get("Name") or platform.processor() or "处理器").strip()
+    s["cpu_full"] = (cpu.get("Name") or platform.processor() or "处理器").strip()
+    s["cpu_name"] = tidy_name(s["cpu_full"]) or "处理器"
     s["cpu_threads"] = cpu.get("NumberOfLogicalProcessors") or psutil.cpu_count(logical=True) or 1
+    s["cpu_cores"] = cpu.get("NumberOfCores") or psutil.cpu_count(logical=False) or s["cpu_threads"]
+    # Win32 的 MaxClockSpeed 实际给的是**基准**频率（睿频上限 WMI 不给），所以它是基准
     s["cpu_max"] = round((cpu.get("MaxClockSpeed") or 0) / 1000.0, 2)
     try:
         f = psutil.cpu_freq()
@@ -1272,27 +1302,50 @@ def collect_static():
     except Exception:
         s["cpu_base"] = s["cpu_max"]
 
-    mems = as_list(_ps_json("Get-CimInstance Win32_PhysicalMemory | Select-Object Speed,SMBIOSMemoryType"))
+    mems = as_list(_ps_json("Get-CimInstance Win32_PhysicalMemory | "
+                            "Select-Object Capacity,Speed,SMBIOSMemoryType,PartNumber,Manufacturer"))
     speeds = [m.get("Speed") for m in mems if m.get("Speed")]
     s["mem_speed"] = "%d MT/s" % max(speeds) if speeds else "—"
     mt = next((m.get("SMBIOSMemoryType") for m in mems if m.get("SMBIOSMemoryType")), None)
-    s["mem_type"] = MEM_TYPE.get(mt, "DDR4" if mt is None else "物理内存")
+    # SMBIOSMemoryType 是码值：35=LPDDR5、34=DDR5、30=LPDDR4…（本机实测是 35，旧码表会回落成"物理内存"）
+    s["mem_type"] = MEM_TYPE.get(mt, "物理内存" if mt is None else "类型码 %s" % mt)
+    caps = [round((m.get("Capacity") or 0) / 2 ** 30) for m in mems if m.get("Capacity")]
+    s["mem_modules"] = len(mems)
+    s["mem_per_gb"] = max(caps) if caps else 0
+    s["mem_part"] = (mems[0].get("PartNumber") or "").strip() if mems else ""
+    s["mem_vendor"] = (mems[0].get("Manufacturer") or "").strip() if mems else ""
 
-    # 显卡取显存最大的那个（通常是独显）
+    # 显卡：先排掉虚拟显示适配器（Oray/MuMu/GameViewer/Idd 等），再取显存最大的那个
     gpus = as_list(_ps_json("Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM"))
+    real = [g for g in gpus
+            if not re.search(r"virtual|idd|oray|mumu|gameviewer|basic display|remote",
+                             (g.get("Name") or ""), re.I)]
+    pool = real or gpus
     best, best_ram = None, -1
-    for g in gpus:
+    for g in pool:
         ram = g.get("AdapterRAM") or 0
         if isinstance(ram, (int, float)) and ram > best_ram:
             best, best_ram = g, ram
-    s["gpu_name"] = (best or {}).get("Name") or "显卡"
+    s["gpu_full"] = (best or {}).get("Name") or "显卡"
+    s["gpu_name"] = tidy_name(s["gpu_full"]) or "显卡"
     s["gpu_mem_total"] = round(best_ram / (1024 ** 3), 1) if best_ram > 0 else 0.0
+    # Win32_VideoController.AdapterRAM 是 32 位字段（大显存会截断），注册表里的 qwMemorySize 更可信
+    qw = _ps("(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
+             "{4d36e968-e325-11ce-bfc1-08002be10318}\\*' -Name 'HardwareInformation.qwMemorySize' "
+             "-ErrorAction SilentlyContinue).'HardwareInformation.qwMemorySize' | "
+             "Sort-Object -Descending | Select-Object -First 1", timeout=8)
+    try:
+        if qw and float(qw) > 0:
+            s["gpu_mem_total"] = round(float(qw) / 2 ** 30, 1)
+    except Exception:
+        pass
 
     nets = as_list(_ps_json("Get-CimInstance Win32_NetworkAdapter | "
                             "Where-Object {$_.NetEnabled -eq $true} | "
-                            "Select-Object NetConnectionID,Speed"))
+                            "Select-Object NetConnectionID,Name,Speed"))
     n = nets[0] if nets else {}
     s["net_name"] = (n.get("NetConnectionID") or "网络").strip() or "网络"
+    s["net_desc"] = (n.get("Name") or "").strip()      # 适配器全名（如 ASIX USB to Gigabit Ethernet）
     s["net_link"] = round((n.get("Speed") or 0) / 1e6) or 1000
 
     # 逻辑盘 -> 物理盘 映射 + 介质类型
@@ -1339,7 +1392,8 @@ foreach ($x in $d) {
 
 
 def sample_gpu():
-    """显卡占用：先试 nvidia-smi（还能校正 Win32 里报错的显存），否则退到 GPU 引擎性能计数器。"""
+    """显卡占用 + 显存已用。先试 nvidia-smi（还能校正 Win32 里报错的显存），
+    否则一次 Get-Counter 同时取 3D 引擎占用与各适配器的 Dedicated Usage（已用显存）。"""
     out = _ps("& nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,clocks.sm "
               "--format=csv,noheader,nounits", timeout=4)
     if out and "," in out:
@@ -1347,52 +1401,51 @@ def sample_gpu():
         try:
             if len(seg) > 2 and float(seg[2]) > 0:
                 state["stat"]["gpu_mem_total"] = round(float(seg[2]) / 1024.0, 1)
-            return {"util": float(seg[0]), "mem_used": round(float(seg[1]) / 1024.0, 1),
+            return {"util": float(seg[0]), "mem_used": round(float(seg[1]) / 1024.0, 2),
                     "freq": float(seg[3]) if len(seg) > 3 else None, "ok": True}
         except Exception:
             pass
-    val = _ps("$c = Get-Counter '\\GPU Engine(*engtype_3D)\\Utilization Percentage' "
-              "-ErrorAction SilentlyContinue; "
-              "if ($c) { ($c.CounterSamples | Measure-Object -Property CookedValue -Sum).Sum } else { 0 }",
-              timeout=6)
+    txt = _ps(
+        "$u = (Get-Counter '\\GPU Engine(*engtype_3D)\\Utilization Percentage' "
+        "-ErrorAction SilentlyContinue).CounterSamples | Measure-Object CookedValue -Sum; "
+        "$m = (Get-Counter '\\GPU Adapter Memory(*)\\Dedicated Usage' "
+        "-ErrorAction SilentlyContinue).CounterSamples | Measure-Object CookedValue -Sum; "
+        "'{0},{1}' -f $u.Sum, $m.Sum", timeout=8)
     try:
-        u = min(100.0, float(val))
+        u, mb = [float(x) for x in txt.split(",")[:2]]
     except Exception:
-        u = 0.0
-    return {"util": u, "mem_used": None, "freq": None, "ok": False}
+        u, mb = 0.0, 0.0
+    return {"util": min(100.0, u), "mem_used": round(mb / 2 ** 30, 2), "freq": None, "ok": False}
 
 
-def sample_disk_io(letters):
-    """优先 WMI 性能类（不受系统语言影响），失败再退回 Get-Counter。"""
-    res = {}
-    j = _ps_json("Get-CimInstance Win32_PerfFormattedData_PerfDisk_LogicalDisk | "
-                 "Select-Object Name,PercentDiskTime,DiskReadBytesPersec,DiskWriteBytesPersec",
-                 timeout=8)
-    for s in as_list(j):
-        if not isinstance(s, dict):
+def sample_disk_io():
+    """硬盘活动率/读写速率：用**进程内 PDH 英文计数器**，按卷各建三个。
+
+    实测（2026-09-26）：
+      · 旧 WMI 类 Win32_PerfFormattedData_PerfDisk_LogicalDisk 在本机能取到但**全是 0**（不可靠）
+      · PDH 英文名可用：LogicalDisk(_Total)\\% Disk Time=0.3%%、Disk Write Bytes/sec=307KB/s（真值）
+      · 说明：活动率拿不到时回落 0（**不要**拿"空间占用率"冒充活动率——之前就是那么显示成 81% 的）
+    """
+    counters = {}
+    for letter in state.get("disk_letters") or []:
+        try:
+            counters[letter] = (PdhRate("\\LogicalDisk(%s)\\%% Disk Time" % letter),
+                                PdhRate("\\LogicalDisk(%s)\\Disk Read Bytes/sec" % letter),
+                                PdhRate("\\LogicalDisk(%s)\\Disk Write Bytes/sec" % letter))
+        except Exception:
             continue
-        name = (s.get("Name") or "").strip()
-        if len(name) == 2 and name.endswith(":"):
-            res[name] = {"% Disk Time": s.get("PercentDiskTime") or 0,
-                         "Disk Read Bytes/sec": s.get("DiskReadBytesPersec") or 0,
-                         "Disk Write Bytes/sec": s.get("DiskWriteBytesPersec") or 0}
-    if res or not letters:
-        return res
+    state["disk_counters"] = counters or {}
+    if not counters:
+        log("[采集端] 硬盘性能计数器不可用，磁盘活动率将显示 0")
 
-    paths = []
-    for L in letters:
-        paths += ["'\\LogicalDisk(%s)\\%% Disk Time'" % L,
-                  "'\\LogicalDisk(%s)\\Disk Read Bytes/sec'" % L,
-                  "'\\LogicalDisk(%s)\\Disk Write Bytes/sec'" % L]
-    cmd = ("$c = Get-Counter -Counter @(%s) -ErrorAction SilentlyContinue; "
-           "if ($c) { $c.CounterSamples | Select-Object Path,CookedValue }" % ",".join(paths))
-    for s in as_list(_ps_json(cmd, timeout=8)):
-        if not isinstance(s, dict):
-            continue
-        m = re.search(r"\\LogicalDisk\(([^)]+)\)\\(.+)$", s.get("Path", ""))
-        if m:
-            res.setdefault(m.group(1), {})[m.group(2).strip()] = s.get("CookedValue") or 0
-    return res
+
+def read_disk_counters():
+    out = {}
+    for letter, (t, r, w) in (state.get("disk_counters") or {}).items():
+        out[letter] = {"% Disk Time": t.sample() or 0.0,
+                       "Disk Read Bytes/sec": r.sample() or 0.0,
+                       "Disk Write Bytes/sec": w.sample() or 0.0}
+    return out
 
 
 def load_static():
@@ -1405,22 +1458,27 @@ def load_static():
         state["stat"] = {}
     state["disks_static"] = state["stat"].get("disks", [])
     state["disk_letters"] = [d["letter"] for d in state["disks_static"]]
-    log("[采集端] CPU: %s（%s 线程，基准 %s GHz / 最大 %s GHz）"
-        % (state["stat"].get("cpu_name"), state["stat"].get("cpu_threads"),
-           state["stat"].get("cpu_base"), state["stat"].get("cpu_max")))
-    log("[采集端] 显卡: %s；内存: %s %s；硬盘: %s"
-        % (state["stat"].get("gpu_name"), state["stat"].get("mem_type"),
-           state["stat"].get("mem_speed"),
+    log("[采集端] CPU: %s（%s 核 %s 线程，基准 %s GHz）"
+        % (state["stat"].get("cpu_full"), state["stat"].get("cpu_cores"),
+           state["stat"].get("cpu_threads"), state["stat"].get("cpu_base")))
+    log("[采集端] 显卡: %s（显存 %s GB）；内存: %s×%sGB %s %s；硬盘: %s"
+        % (state["stat"].get("gpu_full"), state["stat"].get("gpu_mem_total"),
+           state["stat"].get("mem_modules"), state["stat"].get("mem_per_gb"),
+           state["stat"].get("mem_type"), state["stat"].get("mem_speed"),
            ", ".join("%s(%s)" % (d["letter"], d["media"]) for d in state["disks_static"])))
+    log("[采集端] 网卡: %s（%s）" % (state["stat"].get("net_name"), state["stat"].get("net_desc")))
 
 
 def slow_loop():
-    """显卡与硬盘性能计数器走 1.5 秒的慢循环（照搬参考的节奏）。"""
+    """显卡走 1.5 秒的慢循环（照搬参考的节奏）；硬盘计数器按需初始化后每轮采样。"""
     while True:
         try:
             if state.get("stat"):
                 state["gpu"] = sample_gpu()
-                state["disk_io"] = sample_disk_io(state.get("disk_letters", []))
+                if not state.get("disk_counters"):
+                    sample_disk_io()
+                else:
+                    state["disk_io"] = read_disk_counters()
         except Exception:
             pass
         time.sleep(SLOW_INTERVAL)
@@ -1626,7 +1684,7 @@ def _selftest():
 
 
 def main(gui=True, selftest=False, clean_now=None, out_path=None, kill_now=None, kill_tree=False):
-    global _fault
+    global _fault, _cpu_perf
     use_utf8_stdio()
 
     if clean_now or kill_now:
@@ -1662,6 +1720,8 @@ def main(gui=True, selftest=False, clean_now=None, out_path=None, kill_now=None,
     state["auto"] = load_auto()
     _fault = PdhRate()
     log("[采集端] 硬缺页率计数器：%s" % ("就绪（\\Memory\\Pages Input/sec）" if _fault.q else _fault.error))
+    _cpu_perf = PdhRate(r"\Processor Information(_Total)\% Processor Performance")
+    log("[采集端] CPU 性能计数器：%s" % ("就绪（用于推算实时频率）" if _cpu_perf.q else _cpu_perf.error))
     log("[采集端] 自动整理：%s，阈值 %d MB，每 %d 秒看一次，间隔 ≥%d 秒"
         % ("开" if state["auto"]["enabled"] else "关", state["auto"]["threshold_mb"],
            state["auto"]["check_secs"], state["auto"]["min_gap_secs"]))

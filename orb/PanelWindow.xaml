@@ -330,11 +330,11 @@
             </Button>
             <Button x:Name="tabPerf" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="设备性能">
-              <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic2"/>
+              <local:IconView Key="mem" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic2"/>
             </Button>
             <Button x:Name="tabMem" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="应用内存">
-              <local:IconView Key="mem" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
+              <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
             </Button>
             <Button x:Name="tabOrb" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="整理与进程">
@@ -638,7 +638,7 @@
                   HorizontalAlignment="Stretch">
             <Grid>
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="185"/>
+                <ColumnDefinition Width="205"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="175"/>
                 <ColumnDefinition Width="175"/>
@@ -673,7 +673,7 @@
               <DataTemplate>
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="185"/>
+                    <ColumnDefinition Width="205"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="175"/>
                     <ColumnDefinition Width="175"/>
@@ -992,7 +992,7 @@
           <Border Grid.Row="0" Background="#d95a5a56" CornerRadius="6" Padding="12,10">
             <Grid>
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="185"/>
+                <ColumnDefinition Width="205"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="175"/>
                 <ColumnDefinition Width="175"/>
@@ -1038,7 +1038,7 @@
               <DataTemplate>
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="185"/>
+                    <ColumnDefinition Width="205"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="175"/>
                     <ColumnDefinition Width="175"/>
@@ -1063,8 +1063,8 @@
                                  Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
                   </Grid>
-                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" Height="66"
-                                     Margin="10,0,14,0"/>
+                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" AutoScale="True"
+                                     Height="66" Margin="10,0,14,0"/>
                   <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
                       <Ellipse Width="7" Height="7" Fill="#ded24e" VerticalAlignment="Center"/>

@@ -184,6 +184,8 @@ public partial class PanelWindow : Window
             Diag.Log($"面板：首帧数据 综合={_sysCpu * 0.4 + _memPct * 0.6:F1}% CPU={_sysCpu:F1}% "
                      + $"内存={_memPct:F1}% 上限={_maxOcc:F0}MB 应用={s.Procs.Count} 设备={_devices.Count} "
                      + $"显卡={s.Gpu.Name}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
+            foreach (var d in _devices)
+                Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}");
         }
 
         // ---- 页3：内存指标 + 自动整理 ----
@@ -419,27 +421,31 @@ public partial class PanelWindow : Window
         devs.Add(new DeviceRow
         {
             Key = "cpu", Type = "cpu", IconKey = "cpu", Name = "处理器",
-            Sub = $"{cpu.Threads:F0} 线程 · {cpu.Util:F0}% 负载",
+            Sub = string.IsNullOrEmpty(cpu.Full)
+                ? $"{cpu.Threads:F0} 线程"
+                : $"{cpu.Full} · {cpu.Cores:F0} 核 {cpu.Threads:F0} 线程",
             Util = cpu.Util,
             Linev = cpu.Max > 0 ? Math.Max(0, Math.Min(100, cpu.Freq / cpu.Max * 100)) : 0,
             Cur1Lbl = "占用", Cur1Val = cpu.Util.ToString("F0") + "%",
             Cur2Lbl = "频率", Cur2Val = cpu.Freq.ToString("F2") + " GHz",
-            Spec = $"最高 {(cpu.Max > 0 ? cpu.Max.ToString("F2") : "—")} GHz",
+            Spec = $"基准 {cpu.Base:F2} GHz",
             Detail = new List<string[]>
             {
-                new[] { "型号", string.IsNullOrEmpty(cpu.Name) ? "—" : cpu.Name },
-                new[] { "逻辑处理器", cpu.Threads.ToString("F0") + " 线程" },
+                new[] { "型号", string.IsNullOrEmpty(cpu.Full) ? "—" : cpu.Full },
+                new[] { "核心 / 线程", $"{cpu.Cores:F0} 核 {cpu.Threads:F0} 线程" },
                 new[] { "基准频率", cpu.Base.ToString("F2") + " GHz" },
-                new[] { "最高频率", cpu.Max.ToString("F2") + " GHz" },
+                new[] { "实时频率", cpu.Freq.ToString("F2") + " GHz"
+                        + (!double.IsNaN(cpu.PerfPct) ? $"（性能 {cpu.PerfPct:F0}%）" : "") },
+                new[] { "本次观察最高", cpu.SeenMax > 0 ? cpu.SeenMax.ToString("F2") + " GHz" : "—" },
             },
         });
         var gpu = s.Gpu;
         devs.Add(new DeviceRow
         {
             Key = "gpu", Type = "gpu", IconKey = "gpu", Name = "显卡",
-            Sub = gpu.MemTotal > 0
-                ? $"独立显存 {(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F1") + " / " : "")}{gpu.MemTotal:F1} GB"
-                : gpu.Name,
+            Sub = string.IsNullOrEmpty(gpu.Full)
+                ? (gpu.MemTotal > 0 ? $"显存 {gpu.MemTotal:F1} GB" : "显卡")
+                : gpu.Full + (gpu.MemTotal > 0 ? $" · 显存 {gpu.MemTotal:F1} GB" : ""),
             Util = gpu.Util,
             // 次指标：显存占用率（拿不到显存就退到频率/20 这个粗糙刻度）
             Linev = gpu.MemTotal > 0 && !double.IsNaN(gpu.MemUsed)
@@ -447,21 +453,26 @@ public partial class PanelWindow : Window
                 : (!double.IsNaN(gpu.Freq) ? Math.Max(0, Math.Min(100, gpu.Freq / 20)) : gpu.Util),
             Cur1Lbl = "占用", Cur1Val = gpu.Util.ToString("F0") + "%",
             Cur2Lbl = "显存", Cur2Val = gpu.MemTotal > 0
-                ? $"{(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F1") + " / " : "")}{gpu.MemTotal:F1} GB"
+                ? $"{(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F2") + " / " : "")}{gpu.MemTotal:F1} GB"
+                  + (gpu.MemTotal > 0 && !double.IsNaN(gpu.MemUsed)
+                     ? " · " + (gpu.MemUsed / gpu.MemTotal * 100).ToString("F0") + "%" : "")
                 : "—",
             Spec = $"{(gpu.MemTotal > 0 ? gpu.MemTotal.ToString("F1") : "—")} GB 显存",
             Detail = new List<string[]>
             {
-                new[] { "型号", string.IsNullOrEmpty(gpu.Name) ? "—" : gpu.Name },
-                new[] { "显存", (gpu.MemTotal > 0 ? gpu.MemTotal.ToString("F1") : "—") + " GB" },
-                new[] { "已用显存", !double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F1") + " GB" : "—" },
+                new[] { "型号", string.IsNullOrEmpty(gpu.Full) ? "—" : gpu.Full },
+                new[] { "显存（独立）", (gpu.MemTotal > 0 ? gpu.MemTotal.ToString("F1") : "—") + " GB" },
+                new[] { "已用显存", !double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F2") + " GB" : "—" },
             },
         });
         var mem = s.Mem;
         devs.Add(new DeviceRow
         {
             Key = "mem", Type = "mem", IconKey = "mem", Name = "内存",
-            Sub = $"已用 {mem.UsedGb:F1} / {mem.TotalGb:F1} GB",
+            Sub = mem.Modules > 0
+                ? $"{mem.Modules:F0}×{mem.PerGb:F0} GB {mem.Type}"
+                  + (!string.IsNullOrEmpty(mem.Speed) && mem.Speed != "—" ? " · " + mem.Speed : "")
+                : $"已用 {mem.UsedGb:F1} / {mem.TotalGb:F1} GB",
             Util = mem.Pct,
             // 次指标：提交额度占用率（这才是会不会被打崩的指标）
             Linev = mem.CommitLimitGb > 0 ? mem.CommittedGb / mem.CommitLimitGb * 100 : mem.Pct,
@@ -476,6 +487,9 @@ public partial class PanelWindow : Window
                 new[] { "容量", mem.TotalGb.ToString("F1") + " GB" },
                 new[] { "类型", string.IsNullOrEmpty(mem.Type) ? "—" : mem.Type },
                 new[] { "频率", string.IsNullOrEmpty(mem.Speed) ? "—" : mem.Speed },
+                new[] { "模块", mem.Modules > 0 ? $"{mem.Modules:F0} × {mem.PerGb:F0} GB" : "—" },
+                new[] { "厂商", string.IsNullOrEmpty(mem.Vendor) ? "—" : mem.Vendor },
+                new[] { "型号", string.IsNullOrEmpty(mem.Part) ? "—" : mem.Part },
                 new[] { "空闲+零页", (mem.FreeZeroMb / 1024).ToString("F1") + " GB" },
                 new[] { "待命列表", (mem.StandbyMb / 1024).ToString("F1") + " GB" },
             },
@@ -488,11 +502,13 @@ public partial class PanelWindow : Window
             devs.Add(new DeviceRow
             {
                 Key = "disk-" + i, Type = "disk", IconKey = "disk", Name = d.Name,
-                Sub = $"已用 {d.UsedGb:F1} / {d.TotalGb:F1} GB",
+                Sub = string.IsNullOrEmpty(d.Model)
+                    ? $"已用 {d.UsedGb:F1} / {d.TotalGb:F1} GB"
+                    : d.Model + (string.IsNullOrEmpty(d.Media) ? "" : " · " + d.Media),
                 Util = d.Util, Linev = Math.Max(0, Math.Min(100, rwNum / 500 * 100)),   // 次指标：读写速率（500MB/s 记作 100%）
                 Cur1Lbl = "占用", Cur1Val = d.Util.ToString("F0") + "%",
                 Cur2Lbl = "读写", Cur2Val = string.IsNullOrEmpty(d.Rw) ? "—" : d.Rw,
-                Spec = $"{d.TotalGb:F0} GB {d.Media}".Trim(),
+                Spec = $"{d.TotalGb:F0} GB · 已用 {d.Pct:F0}%",
                 Detail = new List<string[]>
                 {
                     new[] { "型号", string.IsNullOrEmpty(d.Model) ? "—" : d.Model },
@@ -506,7 +522,7 @@ public partial class PanelWindow : Window
         devs.Add(new DeviceRow
         {
             Key = "net", Type = "net", IconKey = "net", Name = string.IsNullOrEmpty(net.Name) ? "网络" : net.Name,
-            Sub = $"链路 {net.Link:F0} Mbps",
+            Sub = string.IsNullOrEmpty(net.Desc) ? $"链路 {net.Link:F0} Mbps" : net.Desc,
             Util = net.Util,
             Linev = net.Link > 0 ? Math.Max(0, Math.Min(100, net.Up / net.Link * 100)) : 0,  // 次指标：上行占链路
             Cur1Lbl = "下行", Cur1Val = net.Down.ToString("F1") + " Mbps",
