@@ -19,6 +19,9 @@ const RING = {
   particles: 120,     // zmd 是 650/290px，按面积比缩到约 120
   fps: 30,            // zmd 全速 rAF（开窗才看）；球常驻，限 30fps
   colorRail: '#d3d3ce',
+  colorOutline: '#9a9a94',   // 描边色（比 colorRail 深一档：球浮在任意桌面内容上，浅灰会看不清）
+  outline: 1,                // 是否给主环与装饰弧整圈描边
+  outlineW: 1.8,             // 描边厚度（单侧，按 160px 球径计；调用方按尺寸缩放）
   colorTrack: '#f2edc4',
   colorArc: '#ffe23d',      // 低占用
   colorArcMid: '#ecb063',   // 中占用（琥珀）
@@ -62,11 +65,27 @@ function buildRing(svg, opts) {
     svg.appendChild(n);
     return n;
   };
-  const decoL = el('path', { fill: 'none', stroke: o.colorDecoLeft, 'stroke-width': o.wDeco, opacity: '.95' });
-  const decoR = el('path', { fill: 'none', stroke: o.colorDecoRight, 'stroke-width': o.wDeco, opacity: '.95' });
-  decoL.setAttribute('d', arcPath(cx, cy, o.rDeco, 270, 360));   // 9 点 → 12 点（左上）
-  decoR.setAttribute('d', arcPath(cx, cy, o.rDeco, 90, 180));     // 3 点 → 6 点（右下）
-  el('circle', { cx, cy, r: o.r, fill: 'none', stroke: o.colorRail, 'stroke-width': o.wRail });
+  /* 描边：主环与两条装饰弧都描一圈。做法是"在底色下面再画一道更粗的同形描边"——
+     这样圆弧两侧和两端的圆头会被完整包住，而不是只在两侧各加一条线。
+     （zmd 里装饰弧用的是 railOut/railIn 两条侧线，端头是敞开的；这里按需求改成整圈。） */
+  const ow = o.outlineW;
+  const useOutline = o.outline !== 0;
+  const deco = (from, to, color) => {
+    if (useOutline) {
+      const under = el('path', { fill: 'none', stroke: o.colorOutline,
+                                 'stroke-width': o.wDeco + 2 * ow, 'stroke-linecap': 'round' });
+      under.setAttribute('d', arcPath(cx, cy, o.rDeco, from, to));
+    }
+    const p = el('path', { fill: 'none', stroke: color, 'stroke-width': o.wDeco,
+                           'stroke-linecap': 'round', opacity: '.95' });
+    p.setAttribute('d', arcPath(cx, cy, o.rDeco, from, to));
+  };
+  deco(270, 360, o.colorDecoLeft);                       // 9 点 → 12 点（左上）
+  deco(90, 180, o.colorDecoRight);                       // 3 点 → 6 点（右下）
+  // 主环：衬底 = 轨道宽度 + 两侧描边厚，形成均匀的一圈描边（黄弧与其圆头都落在这圈里）
+  el('circle', { cx, cy, r: o.r, fill: 'none',
+                 stroke: useOutline ? o.colorOutline : o.colorRail,
+                 'stroke-width': useOutline ? o.wTrack + 2 * ow : o.wRail });
   el('circle', { cx, cy, r: o.r, fill: 'none', stroke: o.colorTrack, 'stroke-width': o.wTrack });
   el('circle', { cx, cy, r: o.rDisc, fill: o.colorDisc });
   const arc = el('path', {

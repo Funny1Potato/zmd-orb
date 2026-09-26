@@ -65,6 +65,9 @@ const geom = {
   rDeco: RING_R * (RING.rDeco / RING.r), wDeco: RING.wDeco * sc,
   rDisc: RING_R * (RING.rDisc / RING.r),
   canvas: Math.round(SIZE * 0.65), fps: FPS,
+  outline: Q.get('outline') === '0' ? 0 : 1,      // 描边开关（默认开）
+  outlineW: RING.outlineW * sc,
+  colorOutline: Q.get('rail') || RING.colorOutline,
 };
 
 const stage  = document.getElementById('stage');

@@ -65,6 +65,19 @@
       <option value="30">30 秒（正式）</option>
     </select>
 
+    <label>描边（主环 + 装饰弧整圈）</label>
+    <select id="outline">
+      <option value="1">开（默认）</option>
+      <option value="0">关（对比用）</option>
+    </select>
+
+    <label>描边颜色</label>
+    <select id="rail">
+      <option value="%239a9a94">深灰 #9a9a94（默认）</option>
+      <option value="%23d3d3ce">浅灰 #d3d3ce（同 zmd）</option>
+      <option value="%23b9b9b2">中灰 #b9b9b2</option>
+    </select>
+
     <button class="primary" id="play">▶ 播放整理动画</button>
     <button id="reload">重新加载球</button>
 
@@ -84,14 +97,18 @@ let lastStatsAt = 0;
 
 function rebuild() {
   const fps = E('fps').value, cd = E('cd').value;
+  const outline = E('outline').value, rail = E('rail').value;
   E('frameBox').style.transform = 'scale(' + E('zoom').value + ')';
-  E('ball').src = 'ball.html?fps=' + fps + '&cd=' + cd + '&stats=1&t=' + Date.now();
+  E('ball').src = 'ball.html?fps=' + fps + '&cd=' + cd + '&outline=' + outline +
+                  '&rail=' + rail + '&stats=1&t=' + Date.now();
 }
 
 E('bg').onchange = () => { E('stageArea').className = E('bg').value; };
 E('zoom').onchange = () => { E('frameBox').style.transform = 'scale(' + E('zoom').value + ')'; };
 E('fps').onchange = rebuild;
 E('cd').onchange = rebuild;
+E('outline').onchange = rebuild;
+E('rail').onchange = rebuild;
 E('reload').onclick = rebuild;
 E('play').onclick = () => E('ball').contentWindow.postMessage({ type: 'clean' }, '*');
 

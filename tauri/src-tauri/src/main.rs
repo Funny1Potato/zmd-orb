@@ -148,6 +148,46 @@ fn spawn_backend(resource_dir: &Path) -> Option<Child> {
     }
 }
 
+/// Tauri 的 `skipTaskbar` 在实机上没生效：球的扩展样式仍是 WS_EX_APPWINDOW、且没有
+/// WS_EX_TOOLWINDOW，结果它既在任务栏、也在 Alt-Tab 里（2026-09-26 装机实测）。
+/// 这里自己改窗口扩展样式：加 WS_EX_TOOLWINDOW、去掉 WS_EX_APPWINDOW，
+/// 再用 SWP_FRAMECHANGED 让外壳重新评估（不会闪一下）。
+#[cfg(windows)]
+fn hide_from_taskbar(window: &tauri::WebviewWindow) {
+    use std::ffi::c_void;
+    use std::ptr::null_mut;
+
+    extern "system" {
+        fn GetWindowLongW(hwnd: *mut c_void, index: i32) -> i32;
+        fn SetWindowLongW(hwnd: *mut c_void, index: i32, value: i32) -> i32;
+        fn SetWindowPos(hwnd: *mut c_void, after: *mut c_void, x: i32, y: i32,
+                        cx: i32, cy: i32, flags: u32) -> i32;
+    }
+
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_TOOLWINDOW: i32 = 0x0000_0080;
+    const WS_EX_APPWINDOW: i32 = 0x0004_0000;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    match window.hwnd() {
+        Ok(h) => unsafe {
+            let hwnd = h.0 as *mut c_void;
+            let old = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            let new = (old | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW;
+            SetWindowLongW(hwnd, GWL_EXSTYLE, new);
+            SetWindowPos(hwnd, null_mut(), 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            diag_log(&format!("hide_from_taskbar: exstyle 0x{:08X} -> 0x{:08X}",
+                              old as u32, new as u32));
+        },
+        Err(e) => diag_log(&format!("hide_from_taskbar: 取不到 hwnd: {e}")),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Backend(Mutex::new(None)))
@@ -161,6 +201,13 @@ fn main() {
                 eprintln!("[壳] 未能启动采集端 backend（页面将回落演示数据）");
             }
             *app.state::<Backend>().0.lock().unwrap() = child;
+
+            // 球不进任务栏/Alt-Tab（Tauri 的 skipTaskbar 在 Windows 上没起作用，见函数注释）
+            #[cfg(windows)]
+            match app.get_webview_window("ball") {
+                Some(ball) => hide_from_taskbar(&ball),
+                None => diag_log("setup: 没找到 ball 窗口，跳过任务栏隐藏"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
