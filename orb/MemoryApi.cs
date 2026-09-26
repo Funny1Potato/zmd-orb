@@ -16,19 +16,93 @@ sealed class MemSnapshot
     public bool Admin;
     public double HardFaultRate = double.NaN;      // 页/秒，≥0
 
+    // 设备页（照搬 zmd-manager 的字段）
+    public CpuInfo Cpu = new();
+    public GpuInfo Gpu = new();
+    public MemInfo Mem = new();
+    public NetInfo Net = new();
+    public List<DiskInfo> Disks = new();
+    public List<AppInfo> Procs = new();
+
     // 自动整理（M2）
     public bool AutoEnabled;
     public double AutoThresholdMb;
+    public double AutoCheckSecs, AutoMinGapSecs, AutoAppLimit;
     public double AutoCount;
     public double AutoLastUnix;
     public string AutoReason = "";
+}
+
+sealed class CpuInfo
+{
+    public string Name = ""; public double Threads, Util, Freq, Base, Max;
+}
+
+sealed class GpuInfo
+{
+    public string Name = ""; public double Util, Freq = double.NaN, MemUsed = double.NaN, MemTotal;
+    public bool Ok;
+}
+
+sealed class MemInfo
+{
+    public double UsedGb, TotalGb, Pct, FreeZeroMb, StandbyMb, CommittedGb, CommitLimitGb;
+    public string Speed = "", Type = "";
+}
+
+sealed class DiskInfo
+{
+    public string Name = "", Rw = "", Media = "", Model = "";
+    public double UsedGb, TotalGb, Pct, Util;
+}
+
+sealed class NetInfo
+{
+    public string Name = ""; public double Down, Up, Link, Util;
+}
+
+/// <summary>应用概况列表里的一项。</summary>
+sealed class AppInfo
+{
+    public int Pid;
+    public string Name = "", Display = "", Title = "";
+    public double Cpu, MemMb;
+}
+
+/// <summary>设备性能页的一行（在壳里按快照组装，逻辑对应参考的 applySnapshot）。
+/// 注意：WPF 绑定只认**属性**不认字段——这些必须是属性，否则界面上全是空白。</summary>
+sealed class DeviceRow : RowBase
+{
+    public string Key { get; set; } = "";
+    public string Type { get; set; } = "";
+    public string IconKey { get; set; } = "app";
+    public string Name { get; set; } = "";
+    public string Sub { get; set; } = "";
+    public string Spec { get; set; } = "";
+    public double Util { get; set; }              // 行内占用率（走势图的纵轴）
+    public double Linev { get; set; }             // 备用的副指标
+    public string Cur1Lbl { get; set; } = "";
+    public string Cur1Val { get; set; } = "";
+    public string Cur2Lbl { get; set; } = "";
+    public string Cur2Val { get; set; } = "";
+    public List<string[]> Detail { get; set; } = new();
+    public List<double> Hist { get; } = new();    // 走势历史（最多 180 点）
+    /// <summary>每次采样自增，绑定的走势图靠它重绘。</summary>
+    public int HistTick { get; private set; }
+
+    public void Push(double v)
+    {
+        Hist.Add(v);
+        while (Hist.Count > 180) Hist.RemoveAt(0);
+        HistTick++;
+    }
 }
 
 /// <summary>自动整理的状态（/auto 的返回）。</summary>
 sealed class AutoStatus
 {
     public bool Enabled;
-    public double ThresholdMb, CheckSecs, MinGapSecs, Count, LastUnix;
+    public double ThresholdMb, CheckSecs, MinGapSecs, AppLimit, Count, LastUnix;
     public string Reason = "";
 }
 
@@ -53,7 +127,9 @@ sealed class CleanResult
     public double PurgedGb => Math.Max(0, -StandbyDeltaMb) / 1024.0;
 }
 
-/// <summary>进程表里的一行（对应采集端 /processes 的一条）。</summary>
+/// <summary>进程表里的一行（对应采集端 /processes 的一条）。
+/// 列表面板照 zmd-manager 的样式：深色斜切图标方块（取首字母）+ 名称/副标题两行 +
+/// 右侧数值（单位着色）+ 行内迷你条。</summary>
 sealed class ProcRow
 {
     public int Pid { get; set; }
@@ -62,9 +138,15 @@ sealed class ProcRow
     public double Cpu { get; set; }
     public int Threads { get; set; }
     public bool Guarded { get; set; }
-    public string MemText => MemMb >= 1024 ? (MemMb / 1024).ToString("F1") + " GB"
-                                           : MemMb.ToString("F0") + " MB";
-    public string CpuText => Cpu <= 0.05 ? "" : Cpu.ToString("F1") + "%";
+
+    public string Initial => string.IsNullOrEmpty(Name) ? "?" : Name.Substring(0, 1).ToUpperInvariant();
+    public string Sub => $"pid {Pid} · {Threads} 线程" + (Guarded ? " · 受保护" : "");
+    public string CpuText => Cpu <= 0.05 ? "0.0" : Cpu.ToString("F1");
+    public string MemVal => MemMb >= 1024 ? (MemMb / 1024).ToString("F1") : MemMb.ToString("F0");
+    public string MemUnit => MemMb >= 1024 ? "GB" : "MB";
+    /// <summary>行内迷你条的宽度（像素，最长条 = 86）。</summary>
+    public double CpuBar { get; set; } = 2;
+    public double MemBar { get; set; } = 2;
 }
 
 /// <summary>写操作的结果（结束进程等）。</summary>
@@ -174,9 +256,66 @@ static class MemoryApi
             {
                 s.AutoEnabled = au.TryGetProperty("enabled", out var ae) && ae.ValueKind == JsonValueKind.True;
                 s.AutoThresholdMb = Num(au, "threshold_mb");
+                s.AutoCheckSecs = Num(au, "check_secs");
+                s.AutoMinGapSecs = Num(au, "min_gap_secs");
+                s.AutoAppLimit = Num(au, "app_limit");
                 s.AutoCount = Num(au, "count");
                 s.AutoLastUnix = Num(au, "last");
                 s.AutoReason = Str(au, "reason");
+            }
+
+            // 设备页（照搬 zmd-manager 的快照字段）
+            if (root.TryGetProperty("cpu", out var cp))
+            {
+                s.Cpu = new CpuInfo
+                {
+                    Name = Str(cp, "name"), Threads = Num(cp, "threads"), Util = Num(cp, "util"),
+                    Freq = Num(cp, "freq"), Base = Num(cp, "base"), Max = Num(cp, "max"),
+                };
+            }
+            if (root.TryGetProperty("gpu", out var g))
+            {
+                s.Gpu = new GpuInfo
+                {
+                    Name = Str(g, "name"), Util = Num(g, "util"), Freq = NumOrNaN(g, "freq"),
+                    MemUsed = NumOrNaN(g, "mem_used"), MemTotal = Num(g, "mem_total"),
+                    Ok = g.TryGetProperty("ok", out var okv) && okv.ValueKind == JsonValueKind.True,
+                };
+            }
+            s.Mem = new MemInfo
+            {
+                UsedGb = Num(m, "used"), TotalGb = Num(m, "total"), Pct = Num(m, "pct"),
+                FreeZeroMb = Num(m, "free_zero_mb"), StandbyMb = Num(m, "standby_mb"),
+                CommittedGb = Num(m, "committed_mb") / 1024.0,
+                CommitLimitGb = Num(m, "commit_limit_mb") / 1024.0,
+                Speed = Str(m, "speed"), Type = Str(m, "type"),
+            };
+            if (root.TryGetProperty("net", out var nt))
+            {
+                s.Net = new NetInfo
+                {
+                    Name = Str(nt, "name"), Down = Num(nt, "down"), Up = Num(nt, "up"),
+                    Link = Num(nt, "link"), Util = Num(nt, "util"),
+                };
+            }
+            if (root.TryGetProperty("disks", out var dk) && dk.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var d in dk.EnumerateArray())
+                    s.Disks.Add(new DiskInfo
+                    {
+                        Name = Str(d, "name"), UsedGb = Num(d, "used"), TotalGb = Num(d, "total"),
+                        Pct = Num(d, "pct"), Util = Num(d, "util"), Rw = Str(d, "rw"),
+                        Media = Str(d, "media"), Model = Str(d, "model"),
+                    });
+            }
+            if (root.TryGetProperty("procs", out var pr) && pr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var p in pr.EnumerateArray())
+                    s.Procs.Add(new AppInfo
+                    {
+                        Pid = (int)Num(p, "pid"), Name = Str(p, "name"), Display = Str(p, "display"),
+                        Title = Str(p, "title"), Cpu = Num(p, "cpu"), MemMb = Num(p, "mem"),
+                    });
             }
             return s;
         }
@@ -221,13 +360,26 @@ static class MemoryApi
         }
     }
 
-    /// <summary>开关自动整理（阈值等参数在采集端配置里；面板只切开关）。</summary>
-    public static async Task<AutoStatus?> SetAutoAsync(bool enabled)
+    /// <summary>改自动整理/显示设置（只传要改的项；不传 on 就只改参数）。</summary>
+    public static async Task<AutoStatus?> SetAutoAsync(bool? enabled = null, int? thresholdMb = null,
+        int? checkSecs = null, int? minGapSecs = null, int? appLimit = null)
     {
+        var q = new System.Text.StringBuilder();
+        if (enabled.HasValue) q.Append("on=").Append(enabled.Value ? 1 : 0);
+        void Add(string k, int? v)
+        {
+            if (!v.HasValue) return;
+            if (q.Length > 0) q.Append('&');
+            q.Append(k).Append('=').Append(v.Value);
+        }
+        Add("threshold_mb", thresholdMb);
+        Add("check_secs", checkSecs);
+        Add("min_gap_secs", minGapSecs);
+        Add("app_limit", appLimit);
+        if (q.Length == 0) return null;
         try
         {
-            using var resp = await HttpAction.SendAsync(
-                Req(HttpMethod.Post, "/auto?on=" + (enabled ? "1" : "0")));
+            using var resp = await HttpAction.SendAsync(Req(HttpMethod.Post, "/auto?" + q));
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             var root = doc.RootElement;
             return new AutoStatus
@@ -236,6 +388,7 @@ static class MemoryApi
                 ThresholdMb = Num(root, "threshold_mb"),
                 CheckSecs = Num(root, "check_secs"),
                 MinGapSecs = Num(root, "min_gap_secs"),
+                AppLimit = Num(root, "app_limit"),
                 Count = Num(root, "count"),
                 LastUnix = Num(root, "last"),
                 Reason = Str(root, "reason"),
@@ -292,4 +445,9 @@ static class MemoryApi
     static double Num(JsonElement e, string name) =>
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetDouble() : 0;
+
+    /// <summary>可能不存在的数值（GPU 频率/已用显存这类字段，缺了返回 NaN 让界面显示 "—"）。</summary>
+    static double NumOrNaN(JsonElement e, string name) =>
+        e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetDouble() : double.NaN;
 }
