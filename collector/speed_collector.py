@@ -7,6 +7,7 @@
       http://127.0.0.1:8910/health        健康检查（壳启动前探活用：是我们的采集端就直接复用）
       http://127.0.0.1:8910/clean?tier=   三级整理缓存页（l1 免提权 / l2、l3 需管理员，按需提权）
       http://127.0.0.1:8910/clean/result  最近一次整理的结果
+      http://127.0.0.1:8910/auto          自动整理的开关与状态（POST 改，GET 看）
       http://127.0.0.1:8910/dev.html      顺带伺服 frontend/ 静态页（只是设计参考，调色用）
 
 三级档位（档位单调：深度包含轻度。口径见 README "它做什么、不做什么"）：
@@ -22,6 +23,11 @@
   无提权时它们返回 0xC0000061 STATUS_PRIVILEGE_NOT_HELD / GetLastError()=5，壳会按需弹一次 UAC。
 
 进程结束（POST /kill）留到 M3 和面板进程表一起做——没有进程表它没处可用。
+
+M2 加了：硬缺页率（PDH，进程内读 \Memory\Pages Input/sec）+ 自动整理。
+自动整理**只做 l1**（免提权，永不弹 UAC），策略是"空闲+零页低于阈值就轻度整理"，
+默认**关闭**（它不会让 free+zero 变多，只是把活跃工作集转成随时可回收的待命页，
+却会让那些页下次访问硬缺页——所以默认不替你决定）。状态见 /auto。
 """
 import ctypes
 import ctypes.wintypes as wintypes
@@ -44,7 +50,10 @@ THROTTLE = 30.0      # 手动整理后的冷却（秒）；壳那边只是 UI �
 SETTLE = 1.0         # 整理后等列表稳定再测"后"
 ELEVATE_WAIT = 90.0  # 等用户点 UAC 的最长时间（秒）
 
-state = {"snapshot": None, "last_result": None, "last_clean": 0.0, "cleaning": False}
+state = {"snapshot": None, "last_result": None, "last_clean": 0.0, "cleaning": False,
+         "fault_rate": None, "auto": {}, "auto_checked": 0.0, "auto_last": 0.0,
+         "auto_count": 0, "auto_reason": ""}
+_fault = None        # PdhRate，main() 里创建（硬缺页率采样器）
 ntdll = ctypes.WinDLL("ntdll")
 
 SystemMemoryListInformation = 0x50
@@ -196,6 +205,70 @@ def read_memory():
     return out
 
 
+# ---- 硬缺页率：PDH，进程内读，不起子进程 ----
+PDH_FMT_DOUBLE = 0x00000200
+
+_pdh = ctypes.WinDLL("pdh")
+_pdh.PdhOpenQueryW.argtypes = [ctypes.c_wchar_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+_pdh.PdhOpenQueryW.restype = ctypes.c_ulong
+_pdh.PdhAddEnglishCounterW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_size_t,
+                                       ctypes.POINTER(ctypes.c_void_p)]
+_pdh.PdhAddEnglishCounterW.restype = ctypes.c_ulong
+_pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+_pdh.PdhCollectQueryData.restype = ctypes.c_ulong
+_pdh.PdhGetFormattedCounterValue.argtypes = [ctypes.c_void_p, ctypes.c_ulong,
+                                             ctypes.POINTER(ctypes.c_ulong), ctypes.c_void_p]
+_pdh.PdhGetFormattedCounterValue.restype = ctypes.c_ulong
+_pdh.PdhCloseQuery.argtypes = [ctypes.c_void_p]
+_pdh.PdhCloseQuery.restype = ctypes.c_ulong
+
+
+class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+    _fields_ = [("CStatus", ctypes.c_ulong), ("doubleValue", ctypes.c_double)]
+
+
+class PdhRate:
+    """一个速率型性能计数器（默认硬缺页 \\Memory\\Pages Input/sec）。
+
+    为什么用 PdhAddEnglishCounterW：中文系统的计数器路径是本地化的，直接传英文名会找不到计数
+    器；这个 API（Vista+）认英文名，绕开本地化。速率型计数器要两次 CollectQueryData 才有值，
+    所以第一次 sample() 返回 None。实测单次采样 0.14~0.38ms，比起 PowerShell 快三个数量级。
+    """
+    def __init__(self, path=r"\Memory\Pages Input/sec"):
+        self.path, self.value, self.error = path, None, ""
+        self.q, self.c = ctypes.c_void_p(), ctypes.c_void_p()
+        if _pdh.PdhOpenQueryW(None, 0, ctypes.byref(self.q)) != 0:
+            self.error, self.q = "PdhOpenQueryW 失败", None
+            return
+        rc = _pdh.PdhAddEnglishCounterW(self.q, path, 0, ctypes.byref(self.c))
+        if rc != 0:
+            self.error = "PdhAddEnglishCounterW 返回 %d" % rc
+            _pdh.PdhCloseQuery(self.q)
+            self.q = None
+            return
+        _pdh.PdhCollectQueryData(self.q)          # 建立基线
+
+    def sample(self):
+        if not self.q:
+            return None
+        if _pdh.PdhCollectQueryData(self.q) != 0:
+            return self.value
+        val = PDH_FMT_COUNTERVALUE()
+        typ = ctypes.c_ulong(0)
+        if _pdh.PdhGetFormattedCounterValue(self.c, PDH_FMT_DOUBLE,
+                                            ctypes.byref(typ), ctypes.byref(val)) != 0:
+            return self.value
+        if val.CStatus != 0:                      # 0 = PDH_CSTATUS_VALID_DATA
+            return self.value
+        self.value = round(val.doubleValue, 1)
+        return self.value
+
+    def close(self):
+        if self.q:
+            _pdh.PdhCloseQuery(self.q)
+            self.q = None
+
+
 def read_cpu():
     try:
         f = psutil.cpu_freq()
@@ -215,15 +288,20 @@ def sampler():
         try:
             mem = read_memory()
             if mem is not None:
+                if _fault is not None:
+                    state["fault_rate"] = _fault.sample()
                 state["snapshot"] = {
                     "ts": time.time(),
                     "interval": INTERVAL,
                     "live": True,
                     "admin": is_admin(),      # 壳/面板据此提示"深度整理需要管理员"
+                    "hard_fault_rate": state["fault_rate"],   # 页/秒，代价指标
+                    "auto": auto_status(),
                     "mem": mem,
                     "cpu": read_cpu(),
                     "boot": round(time.time() - psutil.boot_time()),
                 }
+            auto_tick()                   # 自动整理（默认关；只做免提权的 l1）
         except Exception:
             pass
         time.sleep(INTERVAL)
@@ -557,7 +635,10 @@ def clean_l3(steps):
 
 
 def measure():
-    return read_memory() or {}
+    m = read_memory() or {}
+    # 硬缺页率是速率型指标，取不到瞬时值，只能用采样线程最近那次（1 秒一次）
+    m["hard_fault_rate"] = state.get("fault_rate")
+    return m
 
 
 def delta(before, after, key):
@@ -763,7 +844,7 @@ def do_clean(tier="l1", force=False):
                        "total_ms": round(run_ms + settle_ms)},
             "delta": {k: delta(before, after, k) for k in
                       ("free_zero_mb", "standby_mb", "modified_mb",
-                       "system_cache_mb", "committed_mb", "avail_mb")},
+                       "system_cache_mb", "committed_mb", "avail_mb", "hard_fault_rate")},
         }
         s = summarize(res)
         res["summary"] = s["summary"]
@@ -776,6 +857,106 @@ def do_clean(tier="l1", force=False):
         return res
     finally:
         state["cleaning"] = False
+
+
+# ---------------- 自动整理（M2） ----------------
+AUTO_DEFAULTS = {"enabled": False, "threshold_mb": 2048, "check_secs": 60, "min_gap_secs": 180}
+
+
+def auto_config_path():
+    return os.path.join(os.environ.get("LOCALAPPDATA", "."), "zmd-orb", "auto.json")
+
+
+def load_auto():
+    cfg = dict(AUTO_DEFAULTS)
+    p = auto_config_path()
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                cfg.update({k: v for k, v in json.load(f).items() if k in AUTO_DEFAULTS})
+        except Exception as e:
+            log("[清理端] 读自动整理配置失败：%s" % e)
+    return cfg
+
+
+def save_auto(cfg):
+    p = auto_config_path()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log("[清理端] 写自动整理配置失败：%s" % e)
+
+
+def auto_status():
+    cfg = state.get("auto") or dict(AUTO_DEFAULTS)
+    return {
+        "enabled": bool(cfg.get("enabled")),
+        "threshold_mb": cfg.get("threshold_mb"),
+        "check_secs": cfg.get("check_secs"),
+        "min_gap_secs": cfg.get("min_gap_secs"),
+        "count": state.get("auto_count", 0),
+        "last": state.get("auto_last") or None,
+        "reason": state.get("auto_reason", ""),
+    }
+
+
+def set_auto(q):
+    """POST /auto?on=1&threshold_mb=2048&check_secs=60&min_gap_secs=180"""
+    cfg = state["auto"]
+    if "on" in q:
+        cfg["enabled"] = q["on"][0].lower() in ("1", "true", "yes")
+    for key in ("threshold_mb", "check_secs", "min_gap_secs"):
+        if key in q:
+            try:
+                cfg[key] = max(1, int(float(q[key][0])))
+            except ValueError:
+                pass
+    save_auto(cfg)
+    log("[清理端] 自动整理：%s（阈值 %d MB，每 %d 秒看一次，间隔 ≥%d 秒）"
+        % ("开" if cfg["enabled"] else "关", cfg["threshold_mb"], cfg["check_secs"],
+           cfg["min_gap_secs"]))
+    return auto_status()
+
+
+def auto_tick():
+    """每 check_secs 看一次：空闲+零页低于阈值就做一次轻度整理。
+
+    只做 l1：l2/l3 要管理员，自动流程里弹 UAC 不可接受；而且这条路上没有别的选择
+    （清待命列表必须提权）。诚实说，l1 不会让 free+zero 变多——它只是把活跃工作集
+    转成随时可回收的待命页，代价是那些页下次访问要硬缺页读回。所以默认关闭。
+    """
+    cfg = state.get("auto") or {}
+    if not cfg.get("enabled"):
+        return
+    now = time.time()
+    if now - state["auto_checked"] < cfg.get("check_secs", 60):
+        return
+    state["auto_checked"] = now
+
+    fz = (read_memory_lists() or {}).get("free_zero_mb")
+    if fz is None:
+        state["auto_reason"] = "读不到空闲+零页，跳过"
+        return
+    if fz >= cfg["threshold_mb"]:
+        state["auto_reason"] = "空闲+零页 %.0f MB ≥ 阈值 %d MB，不动" % (fz, cfg["threshold_mb"])
+        return
+    if now - state["auto_last"] < cfg.get("min_gap_secs", 180):
+        state["auto_reason"] = ("空闲+零页 %.0f MB 偏低，但距上次自动整理不足 %d 秒"
+                                % (fz, cfg["min_gap_secs"]))
+        return
+    if state["cleaning"]:
+        state["auto_reason"] = "空闲+零页 %.0f MB 偏低，但正有一次整理在跑" % fz
+        return
+
+    res = do_clean("l1")          # 不带 force：与手动整理共用 30 秒冷却，避免连击
+    if res.get("ok"):
+        state["auto_last"] = time.time()
+        state["auto_count"] += 1
+        state["auto_reason"] = "空闲+零页 %.0f MB < 阈值 %d MB，已自动轻度整理" % (fz, cfg["threshold_mb"])
+    else:
+        state["auto_reason"] = "想自动整理但没成：%s" % (res.get("error") or "未知")
 
 
 # ---------------- HTTP ----------------
@@ -808,6 +989,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, json.dumps(snap, ensure_ascii=False))
             return
+        if path.rstrip("/") == "/auto":
+            self._send(200, json.dumps(auto_status(), ensure_ascii=False))
+            return
         if path.rstrip("/").endswith("/clean/result"):
             self._send(200, json.dumps(state.get("last_result") or
                                        {"ok": None, "error": "还没整理过"}, ensure_ascii=False))
@@ -826,7 +1010,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(200, json.dumps({"service": "zmd-orb-collector",
                                     "endpoints": ["/health", "/snapshot", "/clean?tier=l1|l2|l3",
-                                                  "/clean/result"]}, ensure_ascii=False))
+                                                  "/clean/result", "/auto"]}, ensure_ascii=False))
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -841,6 +1025,9 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         if parsed.path.rstrip("/") == "/clean":
             self._clean(q)
+            return
+        if parsed.path.rstrip("/") == "/auto":
+            self._send(200, json.dumps(set_auto(q), ensure_ascii=False))
             return
         self._send(404, json.dumps({"error": "未知路径 %s" % parsed.path}, ensure_ascii=False))
 
@@ -897,10 +1084,12 @@ def _selftest():
     else:
         mem = data.get("mem") or {}
         ok = bool(data.get("live")) and mem.get("total_mb", 0) > 0
-        msg = "live=%s mem=%.1f/%.1fG %.1f%% commit=%.1f/%.1fG cpu=%.1f%%" % (
+        msg = "live=%s mem=%.1f/%.1fG %.1f%% commit=%.1f/%.1fG cpu=%.1f%% 硬缺页=%.0f/s 自动整理=%s" % (
             data.get("live"), (mem.get("used_mb", 0)) / 1024, (mem.get("total_mb", 0)) / 1024,
             mem.get("pct", 0), mem.get("committed_mb", 0) / 1024, mem.get("commit_limit_mb", 0) / 1024,
-            (data.get("cpu") or {}).get("util", 0))
+            (data.get("cpu") or {}).get("util", 0),
+            data.get("hard_fault_rate") or 0,
+            "开" if (data.get("auto") or {}).get("enabled") else "关")
     try:
         with open(os.path.join(os.environ.get("TEMP", "."), "zmd_orb_selftest.txt"),
                   "w", encoding="utf-8") as f:
@@ -911,6 +1100,7 @@ def _selftest():
 
 
 def main(gui=True, selftest=False, clean_now=None, out_path=None):
+    global _fault
     use_utf8_stdio()
 
     if clean_now:
@@ -940,6 +1130,12 @@ def main(gui=True, selftest=False, clean_now=None, out_path=None):
     log("[采集端] 空闲+零页 %.1f GB，待命列表 %.1f GB，已修改 %.1f GB，管理员=%s"
         % ((mem.get("free_zero_mb", 0)) / 1024, (mem.get("standby_mb", 0)) / 1024,
            (mem.get("modified_mb", 0)) / 1024, is_admin()))
+    state["auto"] = load_auto()
+    _fault = PdhRate()
+    log("[采集端] 硬缺页率计数器：%s" % ("就绪（\\Memory\\Pages Input/sec）" if _fault.q else _fault.error))
+    log("[采集端] 自动整理：%s，阈值 %d MB，每 %d 秒看一次，间隔 ≥%d 秒"
+        % ("开" if state["auto"]["enabled"] else "关", state["auto"]["threshold_mb"],
+           state["auto"]["check_secs"], state["auto"]["min_gap_secs"]))
     threading.Thread(target=sampler, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

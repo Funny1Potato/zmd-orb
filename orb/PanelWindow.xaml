@@ -164,7 +164,34 @@
                 <TextBlock x:Name="cCommit" Text="—" Style="{StaticResource CardVal}"/>
               </StackPanel>
             </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="硬缺页率（整理的代价）" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cFault" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
+            <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                    Margin="5" Padding="14,12">
+              <StackPanel>
+                <TextBlock Text="已修改页" Style="{StaticResource CardKey}"/>
+                <TextBlock x:Name="cModified" Text="—" Style="{StaticResource CardVal}"/>
+              </StackPanel>
+            </Border>
           </UniformGrid>
+
+          <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
+                  Margin="5,14,5,5" Padding="16,14">
+            <StackPanel>
+              <CheckBox x:Name="AutoChk" Content="自动整理：空闲 + 零页低于阈值时自动做一次轻度整理"
+                        FontSize="12.5" Foreground="#3f3f3a" Cursor="Hand" Click="Auto_Click"/>
+              <TextBlock x:Name="autoLine" Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84"
+                         TextWrapping="Wrap" LineHeight="19"/>
+              <TextBlock Margin="0,6,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
+                         LineHeight="19"
+                         Text="自动整理只做免提权的轻度档（不会弹 UAC，也不会去清待命列表——那需要管理员，所以自动流程做不了）。"/>
+            </StackPanel>
+          </Border>
 
           <Border Background="#ffffff" BorderBrush="#e4e4de" BorderThickness="1" CornerRadius="8"
                   Margin="5,14,5,5" Padding="16,14">
@@ -179,7 +206,7 @@
               </TextBlock>
               <TextBlock Margin="0,8,0,0" FontSize="12" Foreground="#8b8b84" TextWrapping="Wrap"
                          LineHeight="19">
-                <Run Text="M1 已完成（三级整理真生效、按需 UAC、前后测量、节流与排除名单）。"/>
+                <Run Text="M1 已完成（三级整理、按需 UAC、前后测量、节流与排除名单）；M2 加了硬缺页率与自动整理。"/>
                 <Run Text="进程表（可结束进程）在 M3，托盘与开机自启在 M4。"/>
               </TextBlock>
             </StackPanel>

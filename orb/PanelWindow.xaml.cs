@@ -8,11 +8,11 @@ using System.Windows.Threading;
 
 namespace ZmdOrb;
 
-/// <summary>任务管理器面板。M1：三档整理真生效；进程表在 M3。</summary>
+/// <summary>任务管理器面板。M1 三档整理真生效；M2 加硬缺页率与自动整理开关；进程表在 M3。</summary>
 public partial class PanelWindow : Window
 {
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
-    bool _polling, _quitting, _cleaning;
+    bool _polling, _quitting, _cleaning, _autoBusy;
 
     /// <summary>球上报的粒子团实测帧率。</summary>
     public Func<double>? BallFps { get; set; }
@@ -61,6 +61,18 @@ public partial class PanelWindow : Window
             bool warn = s.CommitPct >= 85;
             Set(cCommit, (s.CommittedMb / 1024).ToString("F1") + " / " + (s.CommitLimitMb / 1024).ToString("F1")
                        + " GB · " + s.CommitPct.ToString("F0") + "%", warn);
+            // 硬缺页率是整理的真实代价：清完那些页，程序下次碰到它们就得读盘
+            Set(cFault, double.IsNaN(s.HardFaultRate) ? "—" : s.HardFaultRate.ToString("N0") + " 页/s",
+                !double.IsNaN(s.HardFaultRate) && s.HardFaultRate >= 5000);
+            Set(cModified, s.ModifiedMb >= 512 ? (s.ModifiedMb / 1024).ToString("F1") + " GB"
+                                              : s.ModifiedMb.ToString("F0") + " MB", false);
+
+            if (!_autoBusy && AutoChk.IsChecked != s.AutoEnabled) AutoChk.IsChecked = s.AutoEnabled;
+            var last = s.AutoLastUnix > 0
+                ? DateTimeOffset.FromUnixTimeSeconds((long)s.AutoLastUnix).LocalDateTime.ToString("HH:mm:ss")
+                : "还没自动整理过";
+            autoLine.Text = $"阈值 {s.AutoThresholdMb:F0} MB · 已自动整理 {s.AutoCount:F0} 次 · 上次 {last}"
+                          + (string.IsNullOrEmpty(s.AutoReason) ? "" : " · 上次判断：" + s.AutoReason);
 
             adminHint.Text = s.Admin
                 ? "当前已是管理员：三档都不弹 UAC"
@@ -81,6 +93,33 @@ public partial class PanelWindow : Window
     void CleanL1_Click(object sender, RoutedEventArgs e) => RunClean("l1", "轻度整理");
     void CleanL2_Click(object sender, RoutedEventArgs e) => RunClean("l2", "深度整理");
     void CleanL3_Click(object sender, RoutedEventArgs e) => RunClean("l3", "全部整理");
+
+    async void Auto_Click(object sender, RoutedEventArgs e)
+    {
+        if (_autoBusy) return;
+        _autoBusy = true;
+        bool want = AutoChk.IsChecked == true;
+        AutoChk.IsEnabled = false;
+        try
+        {
+            var a = await MemoryApi.SetAutoAsync(want);
+            if (a == null)
+            {
+                AutoChk.IsChecked = !want;               // 没成，回滚显示
+                autoLine.Text = "切换失败：连不上采集端";
+            }
+            else
+            {
+                AutoChk.IsChecked = a.Enabled;
+                Diag.Log($"面板：自动整理 → {(a.Enabled ? "开" : "关")}");
+            }
+        }
+        finally
+        {
+            _autoBusy = false;
+            AutoChk.IsEnabled = true;
+        }
+    }
 
     async void RunClean(string tier, string label)
     {

@@ -2,8 +2,9 @@
 
 常驻悬浮球：一键**整理内存缓存页**，同时能当任务管理器用。环的样式沿用 `zmd-manager`（终末地管理器）的电量环。
 
-> **状态：M1 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
-> **三级整理真生效**（含按需 UAC、前后测量、节流、排除名单）。面板进程表在 M3，托盘与开机自启在 M4。
+> **状态：M2 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
+> **三级整理真生效**（按需 UAC、前后测量、节流、排除名单）、**硬缺页率**与**自动整理**（默认关）。
+> 面板进程表在 M3，托盘与开机自启在 M4。
 
 ## 它做什么、不做什么
 
@@ -38,6 +39,26 @@ Windows 上没有"释放内存"的魔法。所谓加速球做的是两件事：�
 想加就写 `%LOCALAPPDATA%\zmd-orb\exclude.txt`（或程序同目录 `exclude.txt`）：
 每行一个进程名，`#` 注释，`!名字` 表示从默认名单里去掉，`foreground_exclude=0` 关掉前台保护。
 
+### 硬缺页率：整理的代价
+
+整理把页从工作集/缓存里搬走，代价是那些页下次被访问时要从 pagefile/磁盘**硬缺页**读回来
+（`\Memory\Pages Input/sec`）。面板上有一张卡实时显示它，每次整理结果的 before/after/delta 里也带着。
+
+取法是进程内 PDH，用 **`PdhAddEnglishCounterW`（英文计数器名）**：中文系统上计数器路径是本地化的，
+`PdhAddCounter` 传英文名会找不到计数器。单次采样 0.14~0.38 ms，比每次拉 PowerShell 快三个数量级。
+它是速率型指标、波动很大，看趋势别看单点。
+
+### 自动整理（默认关闭）
+
+策略：每 60 秒看一次，**空闲 + 零页**低于 2048 MB 就做一次轻度整理，两次之间至少隔 180 秒。
+
+- **只做 l1**：清待命列表必须管理员，自动流程里弹 UAC 不可接受
+- **默认关闭**：l1 不会让 free+zero 变多（实测 −0.03 ~ −0.22 GB），只是把活跃工作集转成随时可回收的
+  待命页，代价是那些页下次访问要硬缺页。这笔账划不划算该由你自己决定，工具不替你默认打开
+- 参数落在 `%LOCALAPPDATA%\zmd-orb\auto.json`；也可以
+  `POST /auto?on=1&threshold_mb=2048&check_secs=60&min_gap_secs=180`
+- 每次检查的判断原因都记着（面板上显示"上次判断：…"），没有黑箱
+
 ## 为什么壳是 WPF（而不是 Web 壳）
 
 第一版壳用 Tauri 2 + WebView2，撞上一个平台级缺陷：**窗口一旦移动（拖动、换显示器、切焦点），
@@ -67,10 +88,11 @@ WPF 的 `AllowsTransparency` 走的是**分层窗口**（ARGB DIB + DWM 合成�
 对外接口：
 
 ```
-GET  /snapshot        内存/CPU 快照（含 free_zero_mb / standby_mb / modified_mb / admin）
+GET  /snapshot        内存/CPU 快照（free_zero_mb / standby_mb / modified_mb / hard_fault_rate / auto / admin）
 GET  /health          健康检查（壳启动前探活用）
 POST /clean?tier=l1   l2 / l3 整理一次；返回 summary/detail/before/after/delta/timing
 GET  /clean/result    最近一次整理的结果（面板打开时回填）
+POST /auto?on=1       开关自动整理（GET /auto 看状态与"上次判断"的原因）
 GET  /dev.html        设计参考页（调色用）
 ```
 

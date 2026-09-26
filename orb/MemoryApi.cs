@@ -13,6 +13,22 @@ sealed class MemSnapshot
     public double FreeZeroMb, StandbyMb, ModifiedMb;
     public double CpuUtil;
     public bool Admin;
+    public double HardFaultRate = double.NaN;      // 页/秒，≥0
+
+    // 自动整理（M2）
+    public bool AutoEnabled;
+    public double AutoThresholdMb;
+    public double AutoCount;
+    public double AutoLastUnix;
+    public string AutoReason = "";
+}
+
+/// <summary>自动整理的状态（/auto 的返回）。</summary>
+sealed class AutoStatus
+{
+    public bool Enabled;
+    public double ThresholdMb, CheckSecs, MinGapSecs, Count, LastUnix;
+    public string Reason = "";
 }
 
 /// <summary>一次整理的结果（对应采集端 /clean 的返回）。</summary>
@@ -69,6 +85,16 @@ static class MemoryApi
             };
             if (root.TryGetProperty("cpu", out var c)) s.CpuUtil = Num(c, "util");
             s.Admin = root.TryGetProperty("admin", out var ad) && ad.ValueKind == JsonValueKind.True;
+            if (root.TryGetProperty("hard_fault_rate", out var hf) && hf.ValueKind == JsonValueKind.Number)
+                s.HardFaultRate = hf.GetDouble();
+            if (root.TryGetProperty("auto", out var au) && au.ValueKind == JsonValueKind.Object)
+            {
+                s.AutoEnabled = au.TryGetProperty("enabled", out var ae) && ae.ValueKind == JsonValueKind.True;
+                s.AutoThresholdMb = Num(au, "threshold_mb");
+                s.AutoCount = Num(au, "count");
+                s.AutoLastUnix = Num(au, "last");
+                s.AutoReason = Str(au, "reason");
+            }
             return s;
         }
         catch
@@ -105,6 +131,31 @@ static class MemoryApi
             var root = doc.RootElement;
             if (!root.TryGetProperty("tier", out var t) || t.ValueKind != JsonValueKind.String) return null;
             return ParseClean(root);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>开关自动整理（阈值等参数在采集端配置里；面板只切开关）。</summary>
+    public static async Task<AutoStatus?> SetAutoAsync(bool enabled)
+    {
+        try
+        {
+            using var resp = await Http.PostAsync(BaseUrl + "/auto?on=" + (enabled ? "1" : "0"), null);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var root = doc.RootElement;
+            return new AutoStatus
+            {
+                Enabled = root.TryGetProperty("enabled", out var e) && e.ValueKind == JsonValueKind.True,
+                ThresholdMb = Num(root, "threshold_mb"),
+                CheckSecs = Num(root, "check_secs"),
+                MinGapSecs = Num(root, "min_gap_secs"),
+                Count = Num(root, "count"),
+                LastUnix = Num(root, "last"),
+                Reason = Str(root, "reason"),
+            };
         }
         catch
         {
