@@ -9,7 +9,7 @@ namespace ZmdOrb;
 /// 双指标走势折线图（设备页与"应用内存"页共用）。
 /// 主指标（Hist）画黄线并在其下方铺一层同色渐变，次指标（Hist2）画蓝线；
 /// 两条线各自在末点画圆点，中部有一条 50% 参考线。底色沿用设计语言的 #a9a9a5。
-/// 纵轴固定 0~100%，不自动放大（免得把小占用画成满格）。
+/// 纵轴：下界固定 0，上界按数据放大（AutoScale），并在两端标出刻度值。
 /// </summary>
 sealed class SparkVisual : FrameworkElement
 {
@@ -174,10 +174,10 @@ sealed class SparkVisual : FrameworkElement
         return all;
     }
 
-    /// <summary>纵轴区间：固定 0~100；缩放时按数据取（留 25% 余量、至少 12% 量级，
-    /// 百分比再留 1 个点的下限，免得平数据被拉成锯齿），并避免下探负数。
-    /// **占用率类（百分比）的下界一律钉在 0**：占用率只有从 0 起算才读得出"占了多少"，
-    /// 只把上界按数据放大；其它量纲（频率/容量/速率）仍取数据区间、不强行贴 0。</summary>
+    /// <summary>纵轴区间：**下界一律为 0**（占用率从 0 起算才读得出"占了多少"；
+    /// 频率/容量/速率同理，零点对齐后不同设备/不同时刻的曲线也能横向比），
+    /// 只把上界按数据放大（留 25% 余量、至少 12% 量级；百分比再留 1 个点的下限、
+    /// 且封顶 100）。</summary>
     static (double lo, double hi) AxisRange(List<double> vals, bool auto, bool isPercent)
     {
         if (!auto || vals.Count == 0) return (0, 100);
@@ -190,23 +190,21 @@ sealed class SparkVisual : FrameworkElement
         if (mn > mx) return (0, 100);
         // 数据恒定（例如磁盘空闲时读写一直为 0）：退化的区间会让线画在正中，
         // 这里退成"0 ~ 量级×1.2"，线落在底部、刻度也说得通
-        if (mx - mn <= 1e-9)
-        {
-            double flat = Math.Max(1.0, Math.Abs(mx) * 1.2);
-            return (0, isPercent ? Math.Min(100.0, flat) : flat);
-        }
+        double top = mx - mn <= 1e-9
+            ? Math.Max(1.0, Math.Abs(mx) * 1.2)
+            : Top(mn, mx, isPercent);
+        if (isPercent && top > 100) top = 100;
+        return (0, top);
+    }
+
+    /// <summary>上界：数据中点 + 半幅（半幅取"跨度×1.25"与"量级×12%"的较大者），
+    /// 结果必然 ≥ 最大值，所以下界压到 0 也不会削掉峰。</summary>
+    static double Top(double mn, double mx, bool isPercent)
+    {
         double mag = Math.Max(Math.Abs(mx), Math.Abs(mn));
         double span = Math.Max((mx - mn) * 1.25, mag * 0.12);
         if (isPercent) span = Math.Max(span, 1.0);
-        double mid = (mx + mn) / 2;
-        double hi = mid + span / 2, lo = mid - span / 2;
-        if (isPercent)
-        {
-            if (hi > 100) hi = 100;
-            return (0, hi);
-        }
-        if (lo < 0) { hi -= lo; lo = 0; }
-        return (lo, hi);
+        return (mx + mn) / 2 + span / 2;
     }
 
     static readonly Brush LabelBrush = Freeze(new SolidColorBrush(Ring.Hex("#2c2c2a")));
