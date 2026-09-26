@@ -7,8 +7,7 @@ namespace ZmdOrb;
 
 /// <summary>
 /// 双指标走势折线图（设备页与"应用内存"页共用）。
-/// 主指标（Hist）画黄线并在其下方铺一层同色渐变，次指标（Hist2）画蓝线；
-/// 两条线各自在末点画圆点，中部有一条 50% 参考线。底色沿用设计语言的 #a9a9a5。
+/// 两条线都画折线并在其下方铺一层同色渐变，各自在末点画圆点；中部有一条 50% 参考线。
 /// 纵轴：下界固定 0，上界按数据放大（AutoScale），并在两端标出刻度值。
 /// </summary>
 sealed class SparkVisual : FrameworkElement
@@ -111,40 +110,48 @@ sealed class SparkVisual : FrameworkElement
         Point P1(int i) => P(a, i, l1, h1);
         Point P2(int i) => P(b, i, l2, h2);
 
-        // 主指标：折线 + 线下渐变
-        var line = new StreamGeometry();
-        var area = new StreamGeometry();
-        using (var lc = line.Open())
-        using (var ac = area.Open())
+        // 折线与"线到底部"的填充面：两条线各自一份，画法完全一致
+        StreamGeometry LineGeo(Func<int, Point> pt, int n)
         {
-            lc.BeginFigure(P1(0), false, false);
-            ac.BeginFigure(new Point(0, h), true, true);
-            ac.LineTo(P1(0), true, false);
-            for (int i = 1; i < a.Count; i++)
+            var g = new StreamGeometry();
+            using (var c = g.Open())
             {
-                lc.LineTo(P1(i), true, false);
-                ac.LineTo(P1(i), true, false);
+                c.BeginFigure(pt(0), false, false);
+                for (int i = 1; i < n; i++) c.LineTo(pt(i), true, false);
             }
-            ac.LineTo(new Point((a.Count - 1) * step, h), true, false);
+            g.Freeze();
+            return g;
         }
-        line.Freeze();
-        area.Freeze();
 
-        dc.DrawGeometry(AreaFill(Line1, 96, 10), null, area);
-        dc.DrawGeometry(null, GlowPen(Line1, 3.4, 70), line);
-        dc.DrawGeometry(null, SolidPen(Line1, 1.6), line);
+        StreamGeometry AreaGeo(Func<int, Point> pt, int n)
+        {
+            var g = new StreamGeometry();
+            using (var c = g.Open())
+            {
+                c.BeginFigure(new Point(0, h), true, true);
+                for (int i = 0; i < n; i++) c.LineTo(pt(i), true, false);
+                c.LineTo(new Point((n - 1) * step, h), true, false);
+            }
+            g.Freeze();
+            return g;
+        }
+
+        var line1 = LineGeo(P1, a.Count);
+
+        // 两条线都给底部填充（用户要求一致）。次指标先铺、主指标后铺：
+        // 这样"蓝线高于黄线"的那条夹带只被蓝填充染到，能看清高出多少；
+        // 黄线以下两片重叠处由上层黄填充主导，不会糊成一块。
+        if (b.Count >= 2) dc.DrawGeometry(AreaFill(Line2, 78, 8), null, AreaGeo(P2, b.Count));
+        dc.DrawGeometry(AreaFill(Line1, 96, 10), null, AreaGeo(P1, a.Count));
+
+        dc.DrawGeometry(null, GlowPen(Line1, 3.4, 70), line1);
+        dc.DrawGeometry(null, SolidPen(Line1, 1.6), line1);
         dc.DrawEllipse(Line1, null, P1(a.Count - 1), 2.4, 2.4);
 
-        // 次指标：只画线（不铺填充，免得两条叠在一起糊）
+        // 次指标：同样是折线 + 底部填充，只是颜色不同
         if (b.Count >= 2)
         {
-            var line2 = new StreamGeometry();
-            using (var lc = line2.Open())
-            {
-                lc.BeginFigure(P2(0), false, false);
-                for (int i = 1; i < b.Count; i++) lc.LineTo(P2(i), true, false);
-            }
-            line2.Freeze();
+            var line2 = LineGeo(P2, b.Count);
             dc.DrawGeometry(null, GlowPen(Line2, 3.2, 60), line2);
             dc.DrawGeometry(null, SolidPen(Line2, 1.5), line2);
             dc.DrawEllipse(Line2, null, P2(b.Count - 1), 2.2, 2.2);
