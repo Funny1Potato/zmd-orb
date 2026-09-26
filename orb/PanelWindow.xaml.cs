@@ -27,7 +27,8 @@ public partial class PanelWindow : Window
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly Stopwatch _since = Stopwatch.StartNew();
     DateTime _lastRefresh = DateTime.Now;
-    double _sysCpu, _memPct, _maxOcc = 32768, _commitLimitMb = 32768;   // 最大占用 = 提交额度上限或自定义值（MB）
+    double _sysCpu, _memPct, _usedMb, _committedMb;                      // 已占用内存 / 已提交（MB）
+    double _maxOcc = UiSettings.DefaultMaxOccMb, _commitLimitMb = 32768; // 综合占用的分母：100% 对应的 MB
     int _page;
     bool _polling, _quitting, _cleaning, _autoBusy, _procBusy, _killing, _procLogged, _appsHidden, _snapLogged;
     int _snapCount;
@@ -166,7 +167,9 @@ public partial class PanelWindow : Window
     {
         _sysCpu = s.Cpu.Util;
         _memPct = s.Mem.Pct;
-        // 最大占用：优先用显示设置里的自定义值，0 则跟随提交额度上限
+        _usedMb = s.UsedMb;
+        _committedMb = s.CommittedMb;
+        // 分母：优先用显示设置里的值（出厂 325799），0 则跟随提交额度上限
         double limitMb = s.Mem.CommitLimitGb * 1024;
         _maxOcc = UiSettings.MaxOccMb > 0 ? UiSettings.MaxOccMb : (limitMb > 0 ? limitMb : _maxOcc);
         if (limitMb > 0) _commitLimitMb = limitMb;
@@ -182,8 +185,9 @@ public partial class PanelWindow : Window
         if (!_snapLogged)
         {
             _snapLogged = true;
-            Diag.Log($"面板：首帧数据 综合={_sysCpu * 0.4 + _memPct * 0.6:F1}% CPU={_sysCpu:F1}% "
-                     + $"内存={_memPct:F1}% 上限={_maxOcc:F0}MB 应用={s.Procs.Count} 设备={_devices.Count} "
+            Diag.Log($"面板：首帧数据 综合={Combined():F1}%（权重 CPU {UiSettings.WCpu:0.##} / 内存 {UiSettings.WMem:0.##}）"
+                     + $" CPU={_sysCpu:F1}% 内存={_memPct:F1}% 分母={_maxOcc:F0}MB "
+                     + $"已占用={_usedMb:F0}MB 已提交={_committedMb:F0}MB 应用={s.Procs.Count} 设备={_devices.Count} "
                      + $"显卡={s.Gpu.Name}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
             foreach (var d in _devices)
                 Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}"
@@ -225,6 +229,8 @@ public partial class PanelWindow : Window
 
         // 显示设置回填（正在编辑的框不动，免得 1 秒一次轮询把输入吃掉）
         Prefill(setMaxOcc, UiSettings.MaxOccMb > 0 ? UiSettings.MaxOccMb : _commitLimitMb);
+        Prefill(setWCpu, UiSettings.WCpu, "0.##");
+        Prefill(setWMem, UiSettings.WMem, "0.##");
         Prefill(setPoll, UiSettings.PollSecs, "0.##");
         Prefill(setAppLimit, s.AutoAppLimit);
         Prefill(setThreshold, s.AutoThresholdMb);
@@ -237,11 +243,13 @@ public partial class PanelWindow : Window
         if (!box.IsFocused && value > 0) box.Text = value.ToString(fmt);
     }
 
-    /* ---- 显示设置：最大占用 / 刷新间隔（壳侧落盘）+ 自动整理三项与列表条数（采集端落盘） ---- */
+    /* ---- 显示设置：综合分母 / 两项权重 / 刷新间隔（壳侧落盘）+ 自动整理三项与列表条数（采集端落盘） ---- */
 
     async void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         double maxOcc = Parse(setMaxOcc, UiSettings.MaxOccMb);
+        double wCpu = Parse(setWCpu, UiSettings.WCpu);
+        double wMem = Parse(setWMem, UiSettings.WMem);
         double poll = Parse(setPoll, UiSettings.PollSecs);
         int appLimit = (int)Parse(setAppLimit, 40);
         int threshold = (int)Parse(setThreshold, 2048);
@@ -249,26 +257,32 @@ public partial class PanelWindow : Window
         int gap = (int)Parse(setGap, 180);
 
         UiSettings.MaxOccMb = Math.Max(0, maxOcc);
+        if (wCpu + wMem > 0) { UiSettings.WCpu = wCpu; UiSettings.WMem = wMem; }   // 全 0 就保持原值
         UiSettings.PollSecs = Math.Min(10, Math.Max(0.3, poll));
         UiSettings.Save();
         _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
 
         var a = await MemoryApi.SetAutoAsync(null, threshold, check, gap, Math.Max(1, appLimit));
         setHint.Text = a == null ? "采集端那边的设置没保存上" : "已保存";
-        Diag.Log($"面板：显示设置 最大占用={UiSettings.MaxOccMb:F0}MB（0=跟随提交上限{_commitLimitMb:F0}）"
+        Diag.Log($"面板：显示设置 综合分母={UiSettings.MaxOccMb:F0}MB（0=跟随提交上限{_commitLimitMb:F0}）"
+                 + $" 权重 CPU={UiSettings.WCpu:0.##} 内存={UiSettings.WMem:0.##}"
                  + $" 刷新={UiSettings.PollSecs:0.##}s 应用概况={appLimit}条 阈值={threshold}MB "
-                 + $"检查={check}s 最小间隔={gap}s");
+                 + $"检查={check}s 最小间隔={gap}s → 综合={Combined():F1}%");
         Poll();
     }
 
     async void ResetSettings_Click(object sender, RoutedEventArgs e)
     {
-        UiSettings.MaxOccMb = 0;
+        UiSettings.MaxOccMb = UiSettings.DefaultMaxOccMb;    // 分母出厂值 325799
+        UiSettings.WCpu = 0.4;
+        UiSettings.WMem = 0.6;
         UiSettings.PollSecs = 1.0;
         UiSettings.Save();
         _poll.Interval = TimeSpan.FromSeconds(1.0);
         await MemoryApi.SetAutoAsync(null, 2048, 60, 180, 40);
-        setMaxOcc.Text = _commitLimitMb.ToString("F0");
+        setMaxOcc.Text = UiSettings.DefaultMaxOccMb.ToString("F0");
+        setWCpu.Text = "0.4";
+        setWMem.Text = "0.6";
         setPoll.Text = "1";
         setAppLimit.Text = "40";
         setThreshold.Text = "2048";
@@ -599,21 +613,32 @@ public partial class PanelWindow : Window
         }
     }
 
-    /* ---- 页1：概览数字（综合占用 = 0.4×CPU + 0.6×内存） ---- */
+    /* ---- 页1：概览数字（中间大数 = 综合占用按分母折成的 MB；两个方框 = 已占用内存 / 已提交） ---- */
 
     void UpdateOverview()
     {
-        double comp = Math.Max(0, Math.Min(100, _sysCpu * 0.4 + _memPct * 0.6));
-        double actual = comp / 100 * _maxOcc;
+        double comp = Combined();
+        double denom = Math.Max(1, _maxOcc);
         gauge.Comp = comp;
-        bigNum.Text = Math.Round(actual).ToString();
-        actualVal.Text = Math.Round(actual).ToString();
-        ofMax.Text = "/ " + Math.Round(_maxOcc);
-        maxVal.Text = Math.Round(_maxOcc).ToString();
+        bigNum.Text = Math.Round(comp / 100 * denom).ToString();
+        ofMax.Text = "/ " + Math.Round(denom);
+        usedVal.Text = Math.Round(_usedMb).ToString();            // 物理内存口径（驻留）
+        committedVal.Text = Math.Round(_committedMb).ToString();  // 提交额度口径（含未驻留的私有提交）
         tagCpu.Text = $"CPU {_sysCpu:F0}%";
         tagMem.Text = $"MEM {_memPct:F0}%";
         tagComp.Text = $"综合 {comp:F1}%";
     }
+
+    /// <summary>综合占用%：CPU 与内存占用率各乘权重后**按权重之和归一**（0.4/0.6 与 4/6 等价，
+    /// 只影响两者的相对比例）。两个权重都是 0 时退回出厂比例。</summary>
+    static double Combined(double cpu, double mem, double wCpu, double wMem)
+    {
+        double sum = wCpu + wMem;
+        if (sum <= 0) { wCpu = 0.4; wMem = 0.6; sum = 1; }
+        return Math.Max(0, Math.Min(100, (cpu * wCpu + mem * wMem) / sum));
+    }
+
+    double Combined() => Combined(_sysCpu, _memPct, UiSettings.WCpu, UiSettings.WMem);
 
     void TickUi()
     {

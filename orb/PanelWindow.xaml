@@ -416,14 +416,14 @@
                            HorizontalAlignment="Center" Margin="0,2,0,0"/>
               </StackPanel>
 
-              <!-- 实际占用（右上）/ 最大占用（左下）：.data-box -->
+              <!-- 已占用内存（右上，物理内存口径）/ 已提交（左下，提交额度口径）：.data-box -->
               <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,15,12,0">
                 <Border.Effect>
                   <DropShadowEffect BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock x:Name="actualVal" Text="0" Style="{StaticResource MetricVal}" FontSize="24"/>
-                  <TextBlock Text="实际占用" Style="{StaticResource MetricLbl}"/>
+                  <TextBlock x:Name="usedVal" Text="0" Style="{StaticResource MetricVal}" FontSize="24"/>
+                  <TextBlock Text="已占用内存" Style="{StaticResource MetricLbl}"/>
                 </StackPanel>
               </Border>
               <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12,0,0,56">
@@ -431,8 +431,8 @@
                   <DropShadowEffect BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock Text="最大占用" Style="{StaticResource MetricLbl}"/>
-                  <TextBlock x:Name="maxVal" Text="—" Style="{StaticResource MetricVal}" FontSize="24"/>
+                  <TextBlock Text="已提交" Style="{StaticResource MetricLbl}"/>
+                  <TextBlock x:Name="committedVal" Text="—" Style="{StaticResource MetricVal}" FontSize="24"/>
                 </StackPanel>
               </Border>
             </Grid>
@@ -774,11 +774,19 @@
                   <TextBlock x:Name="setHint" HorizontalAlignment="Right" FontSize="11.5"
                              Foreground="{StaticResource InkDim}" VerticalAlignment="Center"/>
                 </Grid>
-                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                  <TextBlock Text="最大占用" Style="{StaticResource MiniLbl}" Margin="0,0,5,0"/>
+                <WrapPanel Orientation="Horizontal" Margin="0,8,0,0">
+                  <TextBlock Text="综合分母" Style="{StaticResource MiniLbl}" Margin="0,0,5,0"/>
                   <TextBox x:Name="setMaxOcc" Style="{StaticResource MiniBox}" Width="70"
-                           ToolTip="综合占用 100% 时的“最大占用”；0 = 跟随提交额度上限"/>
+                           ToolTip="综合占用 100% 对应多少 MB（默认 325799）；0 = 跟随提交额度上限"/>
                   <TextBlock Text="MB" Style="{StaticResource MiniLbl}"/>
+                  <TextBlock Text="权重 CPU" Style="{StaticResource MiniLbl}"
+                             ToolTip="综合占用 =（权重CPU×CPU占用率 + 权重内存×内存占用率）÷ 两权重之和"/>
+                  <TextBox x:Name="setWCpu" Style="{StaticResource MiniBox}" Width="44"
+                           ToolTip="综合占用里 CPU 占用率的权重（默认 0.4；只影响与内存的相对比例）"/>
+                  <TextBlock Text="权重 内存" Style="{StaticResource MiniLbl}"
+                             ToolTip="综合占用 =（权重CPU×CPU占用率 + 权重内存×内存占用率）÷ 两权重之和"/>
+                  <TextBox x:Name="setWMem" Style="{StaticResource MiniBox}" Width="44"
+                           ToolTip="综合占用里 内存占用率的权重（默认 0.6；只影响与 CPU 的相对比例）"/>
                   <TextBlock Text="面板刷新" Style="{StaticResource MiniLbl}"/>
                   <TextBox x:Name="setPoll" Style="{StaticResource MiniBox}" Width="44"
                            ToolTip="面板每秒轮询几次（秒）"/>
@@ -801,7 +809,7 @@
                           Padding="12,0" Margin="6,0,0,0" Click="SaveSettings_Click"/>
                   <Button x:Name="BtnResetSet" Content="恢复默认" Style="{StaticResource GhostBtn}"
                           Height="24" Padding="10,0" Margin="6,0,0,0" Click="ResetSettings_Click"/>
-                </StackPanel>
+                </WrapPanel>
               </StackPanel>
             </Border>
 
