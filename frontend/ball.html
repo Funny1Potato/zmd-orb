@@ -183,6 +183,23 @@ window.addEventListener('message', e => {              // dev.html 的"播放整
   if (e.data && e.data.type === 'clean') { lastClean = 0; doClean(); }
 });
 
+/* ---- 窗口移动后透明会失效：轮询位置，发现变动就让壳强制重绘一次 ----
+   拖拽走的是系统原生拖动（startDragging），拖完 JS 收不到可靠的 mouseup，
+   所以只能靠轮询位置来发现「移动了」。400ms 一次，开销可忽略。 */
+if (inShell()) {
+  let lastPos = null;
+  setInterval(async () => {
+    const w = tauriWindow();
+    if (!w || !w.outerPosition) return;
+    try {
+      const p = await w.outerPosition();
+      const key = p.x + ',' + p.y;
+      if (lastPos !== null && key !== lastPos) await invokeCmd('refresh_ball_window');
+      lastPos = key;
+    } catch (e) { /* 拿不到就算了，不影响使用 */ }
+  }, 400);
+}
+
 /* ---- 开销观测：dev.html 加 ?stats=1 时把粒子团实际帧率回报出去 ---- */
 if (STATS) {
   let lastFrames = blob.frames, lastT = performance.now();

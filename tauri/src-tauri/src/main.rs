@@ -47,6 +47,22 @@ fn set_ball_visible(app: tauri::AppHandle, visible: bool) {
     }
 }
 
+/// 前端轮询到球窗口位置变化后调用：移动会让透明合成失效，这里重绘修正。
+/// （走系统原生拖动时 JS 收不到 mouseup，所以前端只能靠轮询位置来发现"移动了"。）
+#[tauri::command]
+fn refresh_ball_window(app: tauri::AppHandle) {
+    #[cfg(windows)]
+    {
+        if let Some(ball) = app.get_webview_window("ball") {
+            force_repaint(&ball, "js-poll");
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+    }
+}
+
 /// 强杀 backend 进程树。PyInstaller onefile 会 fork 子进程承载实际逻辑，
 /// 只 kill 直接子进程会留下孤儿 python 继续占 8910，故用 taskkill /T。
 fn kill_backend(child: &mut Child) {
@@ -245,7 +261,7 @@ fn clip_to_circle(window: &tauri::WebviewWindow) {
 /// 后变成 1321 个；重新 SetWindowRgn 无效；而 InvalidateRect + UpdateWindow 即可恢复到 0。）
 /// 所以移动/改变尺寸后强制重绘一次——用重绘而不是 hide/show，避免闪屏。
 #[cfg(windows)]
-fn force_repaint(window: &tauri::WebviewWindow) {
+fn force_repaint(window: &tauri::WebviewWindow, why: &str) {
     use std::ffi::c_void;
 
     extern "system" {
@@ -258,6 +274,7 @@ fn force_repaint(window: &tauri::WebviewWindow) {
             let hwnd = h.0 as *mut c_void;
             InvalidateRect(hwnd, std::ptr::null(), 1);
             UpdateWindow(hwnd);
+            diag_log(&format!("force_repaint: {why}"));
         }
     }
 }
@@ -291,7 +308,8 @@ fn main() {
             quit_app,
             open_panel,
             close_panel,
-            set_ball_visible
+            set_ball_visible,
+            refresh_ball_window
         ])
         .build(tauri::generate_context!())
         .expect("error building app")
@@ -309,13 +327,13 @@ fn main() {
                     match event {
                         tauri::WindowEvent::Moved(_) => {
                             if let Some(ball) = app.get_webview_window("ball") {
-                                force_repaint(&ball);
+                                force_repaint(&ball, "moved");
                             }
                         }
                         tauri::WindowEvent::Resized(_) => {
                             if let Some(ball) = app.get_webview_window("ball") {
                                 clip_to_circle(&ball);
-                                force_repaint(&ball);
+                                force_repaint(&ball, "resized");
                             }
                         }
                         _ => {}
