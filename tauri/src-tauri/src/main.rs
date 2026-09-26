@@ -233,7 +233,7 @@ fn clip_to_circle(window: &tauri::WebviewWindow) {
                 DeleteObject(rgn);
                 diag_log("clip_to_circle: SetWindowRgn 失败");
             } else {
-                diag_log(&format!("clip_to_circle: 已裁剪为 %dx%d 内切圆", w, h));
+                diag_log(&format!("clip_to_circle: 已裁剪为 {}x{} 的内切圆", w, h));
             }
         },
         Err(e) => diag_log(&format!("clip_to_circle: 取不到 hwnd: {e}")),
@@ -281,7 +281,7 @@ fn main() {
             }
             // 拖到不同缩放的显示器时窗口尺寸会变，圆形裁剪区域要跟着重算
             #[cfg(windows)]
-            RunEvent::WindowEvent { label, event } => {
+            RunEvent::WindowEvent { label, event, .. } => {
                 if label == "ball" && matches!(event, tauri::WindowEvent::Resized(_)) {
                     if let Some(ball) = app.get_webview_window("ball") {
                         clip_to_circle(&ball);
