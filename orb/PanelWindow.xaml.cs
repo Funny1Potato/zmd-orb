@@ -100,8 +100,18 @@ public partial class PanelWindow : Window
             }
             else
             {
-                statusLine.Text = "没能完成：" + (string.IsNullOrEmpty(r.Error) ? "未知原因" : r.Error);
-                Diag.Log($"面板：{label} 未完成 → {r.Error}");
+                // l3 可能"部分成功"：某一步没成时要说清是哪一步，别笼统报失败
+                string failed = r.FailedSteps.Count > 0 ? "（未成：" + string.Join("；", r.FailedSteps) + "）" : "";
+                if (string.IsNullOrEmpty(r.Summary))
+                {
+                    statusLine.Text = "没能完成：" + (string.IsNullOrEmpty(r.Error) ? "未知原因" : r.Error);
+                }
+                else
+                {
+                    statusLine.Text = "部分完成：" + r.Summary + failed;
+                    lastResult.Text = $"最近一次（{r.Tier}，部分完成）：{r.Detail}{failed}";
+                }
+                Diag.Log($"面板：{label} 未全部完成 → {r.Summary}｜{r.Error}{failed}");
             }
         }
         finally

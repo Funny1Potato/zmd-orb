@@ -28,6 +28,8 @@ sealed class CleanResult
     public double StandbyAfterMb = double.NaN;
     // 前后差（MB）：球上的短文案直接用这个，不解析采集端的长文案
     public double FreeZeroDeltaMb, StandbyDeltaMb, ModifiedDeltaMb, CommittedDeltaMb;
+    /// <summary>没成功的步骤（"步骤名：结果"）——l3 可能部分成功，别笼统报成失败。</summary>
+    public readonly System.Collections.Generic.List<string> FailedSteps = new();
 
     /// <summary>换出去/清掉的总量（GB）—— l1 看工作集（待命+已修改的增量），深层看清掉的待命。</summary>
     public double MovedGb => (Math.Abs(StandbyDeltaMb) + Math.Abs(ModifiedDeltaMb)) / 1024.0;
@@ -135,6 +137,14 @@ static class MemoryApi
             r.StandbyDeltaMb = Num(d, "standby_mb");
             r.ModifiedDeltaMb = Num(d, "modified_mb");
             r.CommittedDeltaMb = Num(d, "committed_mb");
+        }
+        if (root.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var st in steps.EnumerateArray())
+            {
+                bool ok = st.TryGetProperty("ok", out var o) && o.ValueKind == JsonValueKind.True;
+                if (!ok) r.FailedSteps.Add(Str(st, "step") + "：" + Str(st, "result"));
+            }
         }
         return r;
     }

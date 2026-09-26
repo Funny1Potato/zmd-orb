@@ -240,6 +240,17 @@ if hasattr(_k32, "K32EmptyWorkingSet"):
     _k32.K32EmptyWorkingSet.restype = ctypes.c_int
     _k32.K32EmptyWorkingSet.argtypes = [ctypes.c_void_p]
 _k32.GetCurrentProcess.restype = ctypes.c_void_p
+_k32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+_k32.WaitForSingleObject.restype = ctypes.c_ulong
+_k32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+_k32.GetExitCodeProcess.restype = ctypes.c_int
+
+
+def app_dir():
+    """采集端自己所在的目录（提权拉起时当工作目录用；路径都是绝对的，只是别让 cwd 落在 system32）。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
 
 PROCESS_SET_QUOTA = 0x0100
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -590,11 +601,40 @@ def summarize(res):
     }
 
 
-def run_elevated(tier):
-    """按需提权：用 runas 把采集端自己再拉一份，做完把结果写进临时文件再退出。
+class SHELLEXECUTEINFOW(ctypes.Structure):
+    """ShellExecuteExW 的入参/出参。
 
-    ShellExecuteW 的 runas：返回值 > 32 表示用户点了"是"（1223/5 是取消/被拒）。
+    用它而不是 ShellExecuteW：带上 SEE_MASK_NOCLOSEPROCESS 能拿到提权进程的句柄，
+    于是"helper 起来就崩 / 参数不认识直接退出"能立刻报出来，而不是干等超时。
+    （2026-09-26 踩过：命令行多了一个 argparse 不认识的 --force，提权进程当场退出，
+    父进程只能等满 90 秒才报"超时"，完全看不出真因。）
     """
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("fMask", ctypes.c_ulong),
+        ("hwnd", ctypes.c_void_p),
+        ("lpVerb", ctypes.c_wchar_p),
+        ("lpFile", ctypes.c_wchar_p),
+        ("lpParameters", ctypes.c_wchar_p),
+        ("lpDirectory", ctypes.c_wchar_p),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", ctypes.c_void_p),
+        ("lpIDList", ctypes.c_void_p),
+        ("lpClass", ctypes.c_wchar_p),
+        ("hkeyClass", ctypes.c_void_p),
+        ("dwHotKey", ctypes.c_ulong),
+        ("hIconOrMonitor", ctypes.c_void_p),
+        ("hProcess", ctypes.c_void_p),
+    ]
+
+
+SEE_MASK_NOCLOSEPROCESS = 0x00000040
+WAIT_OBJECT_0 = 0x00000000
+ERROR_CANCELLED = 1223
+
+
+def run_elevated(tier):
+    """按需提权：用 runas 把采集端自己再拉一份，做完把结果写进临时文件再退出。"""
     out = os.path.join(tempfile.gettempdir(), "zmd_orb_clean_%d.json" % os.getpid())
     try:
         if os.path.exists(out):
@@ -603,40 +643,74 @@ def run_elevated(tier):
         pass
 
     if getattr(sys, "frozen", False):
-        exe, params = sys.executable, '--clean-now %s --force --out "%s"' % (tier, out)
+        exe, params = sys.executable, '--clean-now %s --out "%s"' % (tier, out)
     else:
         exe = sys.executable
-        params = '"%s" --clean-now %s --force --out "%s"' % (os.path.abspath(__file__), tier, out)
+        params = '"%s" --clean-now %s --out "%s"' % (os.path.abspath(__file__), tier, out)
+    log("[清理端] 提权拉起：%s %s" % (exe, params))
 
-    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, None, SW_SHOWNORMAL)
-    if rc <= 32:
-        err = "你取消了管理员授权" if rc in (5, 1223) else "提权失败（ShellExecute 返回 %d）" % rc
-        log("[清理端] %s 未执行：%s" % (tier, err))
-        res = {"ok": False, "tier": tier, "error": err, "need_admin": True, "ts": time.time()}
+    sei = SHELLEXECUTEINFOW()
+    sei.cbSize = ctypes.sizeof(sei)
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+    sei.lpVerb = "runas"
+    sei.lpFile = exe
+    sei.lpParameters = params
+    sei.lpDirectory = app_dir()
+    sei.nShow = SW_SHOWNORMAL
+    _k32.SetLastError(0)
+    ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
+    if not ok:
+        err = _k32.GetLastError()
+        msg = "你取消了管理员授权" if err == ERROR_CANCELLED else "提权失败（GetLastError=%d）" % err
+        log("[清理端] %s 未执行：%s" % (tier, msg))
+        res = {"ok": False, "tier": tier, "error": msg, "need_admin": True, "ts": time.time()}
         state["last_result"] = res
         return res
 
-    deadline = time.time() + ELEVATE_WAIT
-    while time.time() < deadline:
-        if os.path.exists(out):
-            try:
-                with open(out, encoding="utf-8") as f:
-                    res = json.load(f)
-            except Exception as e:
-                res = {"ok": False, "tier": tier, "error": "读不到提权结果：%s" % e}
-            try:
-                os.remove(out)
-            except OSError:
-                pass
-            state["last_clean"] = time.time()
-            state["last_result"] = res
-            log("[清理端] 提权完成 %s" % res.get("summary", res.get("error", "")))
-            return res
-        time.sleep(0.3)
+    proc = sei.hProcess
+    try:
+        deadline = time.time() + ELEVATE_WAIT
+        while time.time() < deadline:
+            if os.path.exists(out):
+                return _read_helper_result(tier, out)
+            # 每次等 300ms：既能及时发现进程退出，也不至于空转
+            if proc and _k32.WaitForSingleObject(proc, 300) == WAIT_OBJECT_0:
+                if os.path.exists(out):
+                    return _read_helper_result(tier, out)
+                code = ctypes.c_ulong(0)
+                _k32.GetExitCodeProcess(proc, ctypes.byref(code))
+                msg = ("提权 helper 直接退出了（退出码 %d）且没写出结果；"
+                       "多半是命令行参数有问题，看壳日志里那行'提权拉起'" % code.value)
+                log("[清理端] %s 失败：%s" % (tier, msg))
+                res = {"ok": False, "tier": tier, "error": msg, "need_admin": True,
+                       "ts": time.time()}
+                state["last_result"] = res
+                return res
+    finally:
+        if proc:
+            _k32.CloseHandle(proc)
 
     res = {"ok": False, "tier": tier, "need_admin": True,
            "error": "提权后的整理超时（等了 %d 秒）" % ELEVATE_WAIT}
+    log("[清理端] %s 失败：%s" % (tier, res["error"]))
     state["last_result"] = res
+    return res
+
+
+def _read_helper_result(tier, out):
+    try:
+        with open(out, encoding="utf-8") as f:
+            res = json.load(f)
+    except Exception as e:
+        res = {"ok": False, "tier": tier, "error": "读不到提权结果：%s" % e}
+    try:
+        os.remove(out)
+    except OSError:
+        pass
+    if res.get("ok"):
+        state["last_clean"] = time.time()
+    state["last_result"] = res
+    log("[清理端] 提权完成 %s" % (res.get("summary") or res.get("error", "")))
     return res
 
 
@@ -841,7 +915,13 @@ def main(gui=True, selftest=False, clean_now=None, out_path=None):
 
     if clean_now:
         # 提权 helper 模式：只整理一次，把结果写进文件就退出（不占端口、不常驻）
-        res = do_clean(clean_now, force=True)
+        try:
+            res = do_clean(clean_now, force=True)
+        except Exception as e:
+            import traceback
+            res = {"ok": False, "tier": clean_now, "error": "helper 崩了：%s" % e,
+                   "trace": traceback.format_exc()}
+            log("[清理端] helper 异常：\n%s" % res["trace"])
         if out_path:
             try:
                 with open(out_path, "w", encoding="utf-8") as f:
