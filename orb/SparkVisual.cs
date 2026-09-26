@@ -94,7 +94,11 @@ sealed class SparkVisual : FrameworkElement
         // 两条线类型不同（DualAxis，例如 占用率 vs 频率）时**各自一套轴**：左轴=主指标、右轴=次指标；
         // 类型相同（如 内存占用率 vs 提交额度占用率）就共用一套轴，否则比较会失真。
         bool dual = row.DualAxis;
-        var (l1, h1) = AxisRange(a, AutoScale, row.AxisUnit1 == "%");
+        // 共用一套轴时，区间要覆盖**两条线**：只看主指标的话，次指标（例如提交额度占用率）
+        // 会超出上界被压成贴顶的直线。
+        var (l1, h1) = dual
+            ? AxisRange(a, AutoScale, row.AxisUnit1 == "%")
+            : AxisRange(Merge(a, b), AutoScale, row.AxisUnit1 == "%");
         var (l2, h2) = dual ? AxisRange(b, AutoScale, row.AxisUnit2 == "%") : (l1, h1);
 
         double step = w / (a.Count - 1);
@@ -160,8 +164,20 @@ sealed class SparkVisual : FrameworkElement
         }
     }
 
+    /// <summary>把两条线的样本并成一份（共用一套轴时用，保证区间同时覆盖两者）。</summary>
+    static List<double> Merge(List<double> a, List<double> b)
+    {
+        if (b.Count == 0) return a;
+        var all = new List<double>(a.Count + b.Count);
+        all.AddRange(a);
+        all.AddRange(b);
+        return all;
+    }
+
     /// <summary>纵轴区间：固定 0~100；缩放时按数据取（留 25% 余量、至少 12% 量级，
-    /// 百分比再留 1 个点的下限，免得平数据被拉成锯齿），并避免下探负数。</summary>
+    /// 百分比再留 1 个点的下限，免得平数据被拉成锯齿），并避免下探负数。
+    /// **占用率类（百分比）的下界一律钉在 0**：占用率只有从 0 起算才读得出"占了多少"，
+    /// 只把上界按数据放大；其它量纲（频率/容量/速率）仍取数据区间、不强行贴 0。</summary>
     static (double lo, double hi) AxisRange(List<double> vals, bool auto, bool isPercent)
     {
         if (!auto || vals.Count == 0) return (0, 100);
@@ -174,14 +190,22 @@ sealed class SparkVisual : FrameworkElement
         if (mn > mx) return (0, 100);
         // 数据恒定（例如磁盘空闲时读写一直为 0）：退化的区间会让线画在正中，
         // 这里退成"0 ~ 量级×1.2"，线落在底部、刻度也说得通
-        if (mx - mn <= 1e-9) return (0, Math.Max(1.0, Math.Abs(mx) * 1.2));
+        if (mx - mn <= 1e-9)
+        {
+            double flat = Math.Max(1.0, Math.Abs(mx) * 1.2);
+            return (0, isPercent ? Math.Min(100.0, flat) : flat);
+        }
         double mag = Math.Max(Math.Abs(mx), Math.Abs(mn));
         double span = Math.Max((mx - mn) * 1.25, mag * 0.12);
         if (isPercent) span = Math.Max(span, 1.0);
         double mid = (mx + mn) / 2;
         double hi = mid + span / 2, lo = mid - span / 2;
+        if (isPercent)
+        {
+            if (hi > 100) hi = 100;
+            return (0, hi);
+        }
         if (lo < 0) { hi -= lo; lo = 0; }
-        if (isPercent && hi > 100) { lo -= hi - 100; hi = 100; if (lo < 0) lo = 0; }
         return (lo, hi);
     }
 
