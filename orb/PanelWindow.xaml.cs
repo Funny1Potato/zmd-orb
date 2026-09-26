@@ -101,22 +101,25 @@ public partial class PanelWindow : Window
 
     void Tab_Click(object sender, RoutedEventArgs e)
     {
-        int idx = sender == tabPerf ? 1 : sender == tabOrb ? 2 : 0;
+        int idx = sender == tabPerf ? 1 : sender == tabMem ? 2 : sender == tabOrb ? 3 : 0;
         if (idx == _page) return;
         _page = idx;
         tabOverview.Tag = idx == 0 ? "active" : null;
         tabPerf.Tag = idx == 1 ? "active" : null;
-        tabOrb.Tag = idx == 2 ? "active" : null;
+        tabMem.Tag = idx == 2 ? "active" : null;
+        tabOrb.Tag = idx == 3 ? "active" : null;
         ic1.Stroke = idx == 0 ? YellowBr : GreyBr;
         ic2.Stroke = idx == 1 ? YellowBr : GreyBr;
         ic3.Stroke = idx == 2 ? YellowBr : GreyBr;
+        ic4.Stroke = idx == 3 ? YellowBr : GreyBr;
 
         pageOverview.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
         pagePerf.Visibility = idx == 1 ? Visibility.Visible : Visibility.Collapsed;
-        pageOrb.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
+        pageMem.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
+        pageOrb.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
 
         // 参考的进场动画：淡入 + 上移 10px，0.36s 缓出
-        var page = idx == 0 ? pageOverview : idx == 1 ? pagePerf : pageOrb;
+        var page = idx == 0 ? pageOverview : idx == 1 ? pagePerf : idx == 2 ? pageMem : pageOrb;
         page.Opacity = 0;
         var tt = new TranslateTransform(0, 10);
         page.RenderTransform = tt;
@@ -125,8 +128,10 @@ public partial class PanelWindow : Window
         tt.BeginAnimation(TranslateTransform.YProperty,
             new DoubleAnimation(0, TimeSpan.FromMilliseconds(360)) { EasingFunction = EaseOut() });
 
-        if (idx == 2) _procTimer.Start();
+        if (idx == 3) _procTimer.Start();
         else _procTimer.Stop();
+        string[] pageNames = { "综合占用", "设备性能", "应用内存", "整理与进程" };
+        Diag.Log($"面板：切到第 {idx + 1} 页（{pageNames[idx]}）");
     }
 
     static IEasingFunction EaseOut() =>
@@ -168,6 +173,7 @@ public partial class PanelWindow : Window
         _appLimit = s.AutoAppLimit > 0 ? (int)s.AutoAppLimit : 40;   // 显示条数来自采集端设置
         SyncApps(s.Procs);
         SyncDevices(BuildDevices(s));
+        SyncMem(s);
         UpdateOverview();
         // 数据回来了就把"采集端未启动"那行清掉：以前它只在轮询失败时写、没人清，
         // 于是采集端起来了提示还一直挂着（看起来像坏了）
@@ -345,6 +351,65 @@ public partial class PanelWindow : Window
         Diag.Log($"面板：应用概况排序 → {key}{(_appSortDesc ? " 降序" : " 升序")}，前三：{string.Join(" | ", top)}");
     }
 
+    /* ---- 页3：应用内存（按应用名聚合，同名多进程合并成一行） ---- */
+
+    readonly Dictionary<string, AppMemRow> _appMem = new();
+    List<AppMemRow> _memRows = new();
+    string _memSig = "";
+
+    void SyncMem(MemSnapshot s)
+    {
+        double totalMb = s.TotalMb > 0 ? s.TotalMb : 32768;
+        double limitMb = s.Mem.CommitLimitGb * 1024;
+        if (limitMb <= 0) limitMb = totalMb;
+
+        var agg = new Dictionary<string, (double mem, double commit, int n)>();
+        foreach (var p in s.Procs)
+        {
+            string name = string.IsNullOrEmpty(p.Display) ? p.Name : p.Display;
+            if (string.IsNullOrEmpty(name)) continue;
+            agg.TryGetValue(name, out var cur);
+            agg[name] = (cur.mem + p.MemMb, cur.commit + p.CommitMb, cur.n + 1);
+        }
+
+        var list = new List<AppMemRow>(agg.Count);
+        foreach (var kv in agg)
+        {
+            if (!_appMem.TryGetValue(kv.Key, out var row))
+            {
+                row = new AppMemRow { Key = kv.Key, Name = kv.Key, IconKey = IconRules.For(kv.Key) };
+                _appMem[kv.Key] = row;
+            }
+            row.MemMb = kv.Value.mem;
+            row.CommitMb = kv.Value.commit;
+            row.Sub = kv.Value.n > 1 ? $"{kv.Value.n} 个进程" : "单进程";
+            row.MemPct = row.MemMb / totalMb * 100;                 // 已占用 → 占物理内存
+            row.CommitPct = row.CommitMb / limitMb * 100;           // 已提交 → 占提交额度
+            row.MemVal = Gb(row.MemMb);
+            row.CommitVal = Gb(row.CommitMb);
+            row.PctText = $"已占用 {row.MemPct:F1}% 物理内存 · 已提交 {row.CommitPct:F1}% 提交额度";
+            list.Add(row);
+        }
+        list.Sort((x, y) => y.MemMb.CompareTo(x.MemMb));
+        var shown = list.Take(Math.Max(1, _appLimit)).ToList();
+
+        string sig = string.Join(",", shown.Select(r => r.Key));
+        if (sig != _memSig)
+        {
+            _memSig = sig;
+            _memRows = shown;
+            memList.ItemsSource = shown;
+        }
+        foreach (var r in _memRows)
+        {
+            r.Push(r.MemPct, r.CommitPct);
+            r.Notify();
+        }
+    }
+
+    static string Gb(double mb) =>
+        mb >= 1024 ? (mb / 1024).ToString("F2") + " GB" : mb.ToString("F0") + " MB";
+
     /* ---- 页2：设备行（key 序列变化才重建，否则就地更新并推进走势） ---- */
 
     List<DeviceRow> BuildDevices(MemSnapshot s)
@@ -358,7 +423,7 @@ public partial class PanelWindow : Window
             Util = cpu.Util,
             Linev = cpu.Max > 0 ? Math.Max(0, Math.Min(100, cpu.Freq / cpu.Max * 100)) : 0,
             Cur1Lbl = "占用", Cur1Val = cpu.Util.ToString("F0") + "%",
-            Cur2Lbl = "速度", Cur2Val = cpu.Freq.ToString("F2") + " GHz",
+            Cur2Lbl = "频率", Cur2Val = cpu.Freq.ToString("F2") + " GHz",
             Spec = $"最高 {(cpu.Max > 0 ? cpu.Max.ToString("F2") : "—")} GHz",
             Detail = new List<string[]>
             {
@@ -376,9 +441,14 @@ public partial class PanelWindow : Window
                 ? $"独立显存 {(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F1") + " / " : "")}{gpu.MemTotal:F1} GB"
                 : gpu.Name,
             Util = gpu.Util,
-            Linev = !double.IsNaN(gpu.Freq) ? Math.Max(0, Math.Min(100, gpu.Freq / 20)) : gpu.Util,
+            // 次指标：显存占用率（拿不到显存就退到频率/20 这个粗糙刻度）
+            Linev = gpu.MemTotal > 0 && !double.IsNaN(gpu.MemUsed)
+                ? Math.Max(0, Math.Min(100, gpu.MemUsed / gpu.MemTotal * 100))
+                : (!double.IsNaN(gpu.Freq) ? Math.Max(0, Math.Min(100, gpu.Freq / 20)) : gpu.Util),
             Cur1Lbl = "占用", Cur1Val = gpu.Util.ToString("F0") + "%",
-            Cur2Lbl = "核心频率", Cur2Val = !double.IsNaN(gpu.Freq) ? gpu.Freq.ToString("F0") + " MHz" : "—",
+            Cur2Lbl = "显存", Cur2Val = gpu.MemTotal > 0
+                ? $"{(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F1") + " / " : "")}{gpu.MemTotal:F1} GB"
+                : "—",
             Spec = $"{(gpu.MemTotal > 0 ? gpu.MemTotal.ToString("F1") : "—")} GB 显存",
             Detail = new List<string[]>
             {
@@ -392,9 +462,14 @@ public partial class PanelWindow : Window
         {
             Key = "mem", Type = "mem", IconKey = "mem", Name = "内存",
             Sub = $"已用 {mem.UsedGb:F1} / {mem.TotalGb:F1} GB",
-            Util = mem.Pct, Linev = mem.Pct,
+            Util = mem.Pct,
+            // 次指标：提交额度占用率（这才是会不会被打崩的指标）
+            Linev = mem.CommitLimitGb > 0 ? mem.CommittedGb / mem.CommitLimitGb * 100 : mem.Pct,
             Cur1Lbl = "占用", Cur1Val = mem.Pct.ToString("F0") + "%",
-            Cur2Lbl = "速度", Cur2Val = string.IsNullOrEmpty(mem.Speed) ? "—" : mem.Speed,
+            Cur2Lbl = "提交", Cur2Val = mem.CommitLimitGb > 0
+                ? $"{mem.CommittedGb:F1} / {mem.CommitLimitGb:F1} GB · "
+                  + (mem.CommittedGb / mem.CommitLimitGb * 100).ToString("F0") + "%"
+                : "—",
             Spec = $"{mem.TotalGb:F0} GB {mem.Type}".Trim(),
             Detail = new List<string[]>
             {
@@ -414,7 +489,7 @@ public partial class PanelWindow : Window
             {
                 Key = "disk-" + i, Type = "disk", IconKey = "disk", Name = d.Name,
                 Sub = $"已用 {d.UsedGb:F1} / {d.TotalGb:F1} GB",
-                Util = d.Util, Linev = Math.Max(0, Math.Min(100, rwNum / 8)),
+                Util = d.Util, Linev = Math.Max(0, Math.Min(100, rwNum / 500 * 100)),   // 次指标：读写速率（500MB/s 记作 100%）
                 Cur1Lbl = "占用", Cur1Val = d.Util.ToString("F0") + "%",
                 Cur2Lbl = "读写", Cur2Val = string.IsNullOrEmpty(d.Rw) ? "—" : d.Rw,
                 Spec = $"{d.TotalGb:F0} GB {d.Media}".Trim(),
@@ -433,7 +508,7 @@ public partial class PanelWindow : Window
             Key = "net", Type = "net", IconKey = "net", Name = string.IsNullOrEmpty(net.Name) ? "网络" : net.Name,
             Sub = $"链路 {net.Link:F0} Mbps",
             Util = net.Util,
-            Linev = Math.Max(0, Math.Min(100, net.Up / (net.Link > 0 ? net.Link : 1000) * 400)),
+            Linev = net.Link > 0 ? Math.Max(0, Math.Min(100, net.Up / net.Link * 100)) : 0,  // 次指标：上行占链路
             Cur1Lbl = "下行", Cur1Val = net.Down.ToString("F1") + " Mbps",
             Cur2Lbl = "上行", Cur2Val = net.Up.ToString("F1") + " Mbps",
             Spec = $"{net.Link:F0} Mbps",
@@ -453,11 +528,18 @@ public partial class PanelWindow : Window
         string sig = string.Join("|", list.Select(d => d.Key));
         if (sig != _devSig)
         {
-            var old = _devices.ToDictionary(d => d.Key, d => d.Hist.ToList());
+            var old = _devices.ToDictionary(d => d.Key, d => (A: d.Hist.ToList(), B: d.Hist2.ToList()));
             foreach (var d in list)
             {
-                if (old.TryGetValue(d.Key, out var h)) foreach (var v in h) d.Push(v);
-                else d.Push(d.Util);
+                if (old.TryGetValue(d.Key, out var h))
+                {
+                    int n = Math.Min(h.A.Count, h.B.Count);
+                    for (int i = 0; i < n; i++) d.Push(h.A[i], h.B[i]);   // 保留原有走势
+                }
+                else
+                {
+                    d.Push(d.Util, d.Linev);
+                }
             }
             _devSig = sig;
             _devices = list;
@@ -481,8 +563,8 @@ public partial class PanelWindow : Window
         }
         foreach (var d in _devices)
         {
-            d.Push(d.Util);
-            d.Notify();          // HistTick 已随 Push 自增，走势图会跟着重绘
+            d.Push(d.Util, d.Linev);     // 主指标 + 次指标各推一个点
+            d.Notify();
         }
     }
 

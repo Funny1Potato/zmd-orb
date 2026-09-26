@@ -67,11 +67,47 @@ sealed class AppInfo
     public int Pid;
     public string Name = "", Display = "", Title = "";
     public double Cpu, MemMb;
+    public double CommitMb;        // 已提交（提交大小）
+}
+
+/// <summary>双指标走势图的数据来源（面板与设备行的走势都用它）。</summary>
+interface ITrendRow
+{
+    List<double> Hist { get; }     // 主指标（0~100）
+    List<double> Hist2 { get; }    // 次指标（0~100）
+    int HistTick { get; }          // 每次采样自增，绑定的图表靠它重绘
+}
+
+/// <summary>"应用内存"页的一行：按应用名聚合（同名多进程合并）。</summary>
+sealed class AppMemRow : RowBase, ITrendRow
+{
+    public string Key { get; set; } = "";        // 应用名
+    public string IconKey { get; set; } = "app";
+    public string Name { get; set; } = "";
+    public string Sub { get; set; } = "";        // "N 个进程"
+    public double MemMb { get; set; }            // 已占用（工作集合计）
+    public double CommitMb { get; set; }         // 已提交（提交大小合计）
+    public double MemPct { get; set; }           // 占物理内存 %
+    public double CommitPct { get; set; }        // 占提交额度 %
+    public string MemVal { get; set; } = "";
+    public string CommitVal { get; set; } = "";
+    public string PctText { get; set; } = "";
+    public List<double> Hist { get; } = new();
+    public List<double> Hist2 { get; } = new();
+    public int HistTick { get; private set; }
+
+    public void Push(double a, double b)
+    {
+        Hist.Add(a);
+        Hist2.Add(b);
+        while (Hist.Count > 180) { Hist.RemoveAt(0); Hist2.RemoveAt(0); }
+        HistTick++;
+    }
 }
 
 /// <summary>设备性能页的一行（在壳里按快照组装，逻辑对应参考的 applySnapshot）。
 /// 注意：WPF 绑定只认**属性**不认字段——这些必须是属性，否则界面上全是空白。</summary>
-sealed class DeviceRow : RowBase
+sealed class DeviceRow : RowBase, ITrendRow
 {
     public string Key { get; set; } = "";
     public string Type { get; set; } = "";
@@ -79,21 +115,24 @@ sealed class DeviceRow : RowBase
     public string Name { get; set; } = "";
     public string Sub { get; set; } = "";
     public string Spec { get; set; } = "";
-    public double Util { get; set; }              // 行内占用率（走势图的纵轴）
-    public double Linev { get; set; }             // 备用的副指标
+    public double Util { get; set; }              // 主指标（走势图黄线）
+    public double Linev { get; set; }             // 次指标（走势图蓝线）
     public string Cur1Lbl { get; set; } = "";
     public string Cur1Val { get; set; } = "";
     public string Cur2Lbl { get; set; } = "";
     public string Cur2Val { get; set; } = "";
     public List<string[]> Detail { get; set; } = new();
-    public List<double> Hist { get; } = new();    // 走势历史（最多 180 点）
+    /// <summary>两条指标的历史（最多 180 点）。</summary>
+    public List<double> Hist { get; } = new();
+    public List<double> Hist2 { get; } = new();
     /// <summary>每次采样自增，绑定的走势图靠它重绘。</summary>
     public int HistTick { get; private set; }
 
-    public void Push(double v)
+    public void Push(double a, double b)
     {
-        Hist.Add(v);
-        while (Hist.Count > 180) Hist.RemoveAt(0);
+        Hist.Add(a);
+        Hist2.Add(b);
+        while (Hist.Count > 180) { Hist.RemoveAt(0); Hist2.RemoveAt(0); }
         HistTick++;
     }
 }
@@ -315,6 +354,7 @@ static class MemoryApi
                     {
                         Pid = (int)Num(p, "pid"), Name = Str(p, "name"), Display = Str(p, "display"),
                         Title = Str(p, "title"), Cpu = Num(p, "cpu"), MemMb = Num(p, "mem"),
+                        CommitMb = Num(p, "commit"),
                     });
             }
             return s;

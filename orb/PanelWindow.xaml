@@ -324,14 +324,21 @@
           <!-- 中部：三页切换（.nav-tabs） -->
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
                       shell:WindowChrome.IsHitTestVisibleInChrome="True">
-            <Button x:Name="tabOverview" Style="{StaticResource NavTab}" Tag="active" Click="Tab_Click">
+            <Button x:Name="tabOverview" Style="{StaticResource NavTab}" Tag="active" Click="Tab_Click"
+                    ToolTip="综合占用">
               <local:IconView Key="gauge" Width="19" Height="19" StrokeThickness="2" Stroke="#ffdf00" x:Name="ic1"/>
             </Button>
-            <Button x:Name="tabPerf" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click">
+            <Button x:Name="tabPerf" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+                    ToolTip="设备性能">
               <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic2"/>
             </Button>
-            <Button x:Name="tabOrb" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click">
-              <local:IconView Key="grid" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
+            <Button x:Name="tabMem" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+                    ToolTip="应用内存">
+              <local:IconView Key="mem" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
+            </Button>
+            <Button x:Name="tabOrb" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+                    ToolTip="整理与进程">
+              <local:IconView Key="grid" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic4"/>
             </Button>
           </StackPanel>
 
@@ -696,19 +703,21 @@
                   <!-- 占用率走势（黄柱图） -->
                   <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" Height="66"
                                      Margin="10,0,14,0"/>
-                  <!-- 当前数据两行 -->
+                  <!-- 当前数据两行：小圆点颜色与走势图的线一一对应（主指标黄、次指标蓝） -->
                   <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
+                      <Ellipse Width="7" Height="7" Fill="#ded24e" VerticalAlignment="Center"/>
                       <TextBlock Text="{Binding Cur1Lbl}" FontSize="13" Foreground="#5a5a55"
-                                 MinWidth="34"/>
-                      <TextBlock Text="{Binding Cur1Val}" FontSize="15"
-                                 Foreground="{StaticResource Blue}" Margin="8,0,0,0"/>
+                                 Margin="6,0,0,0" MinWidth="34"/>
+                      <TextBlock Text="{Binding Cur1Val}" FontSize="15" Foreground="#3f3f3c"
+                                 Margin="8,0,0,0"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                      <Ellipse Width="7" Height="7" Fill="{StaticResource Blue}" VerticalAlignment="Center"/>
                       <TextBlock Text="{Binding Cur2Lbl}" FontSize="13" Foreground="#5a5a55"
-                                 MinWidth="34"/>
-                      <TextBlock Text="{Binding Cur2Val}" FontSize="15"
-                                 Foreground="{StaticResource Orange}" Margin="8,0,0,0"/>
+                                 Margin="6,0,0,0" MinWidth="34"/>
+                      <TextBlock Text="{Binding Cur2Val}" FontSize="15" Foreground="#3f3f3c"
+                                 Margin="8,0,0,0"/>
                     </StackPanel>
                   </StackPanel>
                   <!-- 规格 -->
@@ -970,6 +979,116 @@
                          Text="还没整理过。"/>
             </StackPanel>
           </Border>
+        </Grid>
+
+        <!-- ============ 页3：应用内存（按应用聚合） ============ -->
+        <Grid x:Name="pageMem" Margin="28,22,28,26" Visibility="Collapsed">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+          </Grid.RowDefinitions>
+
+          <Border Grid.Row="0" Background="#d95a5a56" CornerRadius="6" Padding="12,10">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="185"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="175"/>
+                <ColumnDefinition Width="175"/>
+              </Grid.ColumnDefinitions>
+              <StackPanel Grid.Column="0" Orientation="Horizontal">
+                <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
+                <TextBlock Text="应用" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+              </StackPanel>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
+                <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
+                <TextBlock Text="内存占用率走势" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Orientation="Horizontal">
+                <local:IconView Key="mem" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
+                <TextBlock Text="当前数据" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+              </StackPanel>
+              <StackPanel Grid.Column="3" Orientation="Horizontal">
+                <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
+                <TextBlock Text="占比" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+              </StackPanel>
+            </Grid>
+          </Border>
+
+          <!-- 图例：两条线的口径不同（已占用对物理内存，已提交对提交额度），写明免得误读 -->
+          <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,10,0,0">
+            <Ellipse Width="8" Height="8" Fill="#ded24e" VerticalAlignment="Center"/>
+            <TextBlock Text="已占用（工作集，占物理内存）" FontSize="12"
+                       Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
+            <Ellipse Width="8" Height="8" Fill="{StaticResource Blue}" VerticalAlignment="Center"
+                     Margin="18,0,0,0"/>
+            <TextBlock Text="已提交（提交大小，占提交额度）" FontSize="12"
+                       Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
+          </StackPanel>
+
+          <ListBox x:Name="memList" Grid.Row="2" Margin="0,10,0,0" BorderThickness="0"
+                   Background="Transparent" HorizontalContentAlignment="Stretch"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                   ItemContainerStyle="{StaticResource RowItem}">
+            <ListBox.Resources>
+              <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}"/>
+            </ListBox.Resources>
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Grid>
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="185"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="175"/>
+                    <ColumnDefinition Width="175"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid Grid.Column="0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto"/>
+                      <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid Grid.Column="0" Width="38" Height="38">
+                      <Border Background="{StaticResource Dark2}"/>
+                      <Path Fill="#ffffff" Data="M0,0 L7,0 L7,7 Z" Width="7" Height="7"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                      <local:IconView Key="{Binding IconKey}" Width="20" Height="20"
+                                      StrokeThickness="1.8" Stroke="#ffffff"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Name}" FontSize="14" Foreground="#454540"
+                                 TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Sub}" FontSize="11" Foreground="{StaticResource InkDim}"
+                                 Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                  </Grid>
+                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" Height="66"
+                                     Margin="10,0,14,0"/>
+                  <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                      <Ellipse Width="7" Height="7" Fill="#ded24e" VerticalAlignment="Center"/>
+                      <TextBlock Text="已占用" FontSize="13" Foreground="#5a5a55" Margin="6,0,0,0"
+                                 MinWidth="42"/>
+                      <TextBlock Text="{Binding MemVal}" FontSize="15" Foreground="#3f3f3c"
+                                 Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                      <Ellipse Width="7" Height="7" Fill="{StaticResource Blue}" VerticalAlignment="Center"/>
+                      <TextBlock Text="已提交" FontSize="13" Foreground="#5a5a55" Margin="6,0,0,0"
+                                 MinWidth="42"/>
+                      <TextBlock Text="{Binding CommitVal}" FontSize="15" Foreground="#3f3f3c"
+                                 Margin="8,0,0,0"/>
+                    </StackPanel>
+                  </StackPanel>
+                  <StackPanel Grid.Column="3" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding PctText}" FontSize="12.5" Foreground="#5a5a55"
+                               TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
         </Grid>
 
         <!-- ============ 设备详情覆盖页（.detail-overlay） ============ -->

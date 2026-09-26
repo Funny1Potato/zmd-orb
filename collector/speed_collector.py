@@ -310,7 +310,7 @@ def top_apps(rows):
     keep = [p for p in rows if p["pid"] != 0 and not (p["cpu"] < 0.5 and p["mem_mb"] < 40)]
     keep.sort(key=lambda p: (-p["cpu"], -p["mem_mb"]))
     return [{"pid": p["pid"], "name": p["name"], "exe": "",
-             "mem": round(p["mem_mb"]), "cpu": p["cpu"],
+             "mem": round(p["mem_mb"]), "commit": round(p.get("commit_mb", 0)), "cpu": p["cpu"],
              "display": p.get("display") or p["name"].replace(".exe", ""),
              "title": p.get("title") or ""} for p in keep[:APP_SEND_MAX]]
 
@@ -533,9 +533,12 @@ class SYSTEM_PROCESS_INFORMATION(ctypes.Structure):
 #   4   NumberOfThreads(u32)      40  UserTime(i64, 100ns)     48  KernelTime(i64, 100ns)
 #   56  ImageName(UNICODE_STRING) 80  UniqueProcessId(vp)      88  InheritedFromUniqueProcessId(vp)
 #   144 WorkingSetSize（字节；u64 与 u32 读出来一样，取 u64 并对"大于物理内存"做回绕兜底）
-# 其余字段（内存列表那种"猜结构体"的坑）不声明、不读。
+#   184 PagefileUsage = 每进程"已提交"（同样是字节）。offset 200 读出同一个值（互为副本）；
+#       用"子进程吃 400MB 再释放"做过决定性验证：释放后 184/200 都从 405MB 回落到 4.2MB 且与
+#       psutil 的 pagefile 一致 —— 所以它们是当前提交量，不是峰值提交。
+# 其余字段不声明、不读。
 OFF_THREADS, OFF_USER, OFF_KERN = 4, 40, 48
-OFF_IMG, OFF_PID, OFF_PPID, OFF_WS = 56, 80, 88, 144
+OFF_IMG, OFF_PID, OFF_PPID, OFF_WS, OFF_COMMIT = 56, 80, 88, 144, 184
 
 
 def enumerate_processes(phys_bytes=0):
@@ -574,6 +577,7 @@ def enumerate_processes(phys_bytes=0):
                     "user": ctypes.c_longlong.from_address(base + OFF_USER).value,
                     "kern": ctypes.c_longlong.from_address(base + OFF_KERN).value,
                     "ws": ws,
+                    "commit": int.from_bytes(ctypes.string_at(base + OFF_COMMIT, 8), "little"),
                 })
             if not nxt:
                 break
@@ -1016,7 +1020,9 @@ def list_processes():
             cpu = max(0.0, d / 1e7 / dt / ncpu * 100.0)      # 100ns → 秒，再按逻辑核数归一
         rows.append({
             "pid": p["pid"], "name": p["name"], "ppid": p["ppid"],
-            "threads": p["threads"], "mem_mb": round(p["ws"] / MB, 1), "cpu": round(cpu, 1),
+            "threads": p["threads"], "mem_mb": round(p["ws"] / MB, 1),
+            "commit_mb": round(p.get("commit", 0) / MB, 1),     # 已提交（提交大小）
+            "cpu": round(cpu, 1),
             "guarded": p["name"] in KILL_GUARD or p["pid"] <= 4,
         })
     _pcpu["ts"] = now
