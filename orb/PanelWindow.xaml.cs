@@ -141,7 +141,7 @@ public partial class PanelWindow : Window
             {
                 srcDot.Fill = DemoDot;
                 srcText.Text = "演示";
-                statusLine.Text = "采集端未启动（127.0.0.1:8910）——球此时取不到数，也不会执行整理。";
+                statusLine.Text = "采集端正在启动或未运行（127.0.0.1:8910）——球此时取不到数，也不会执行整理。";
                 return;
             }
             _lastRefresh = DateTime.Now;
@@ -164,6 +164,9 @@ public partial class PanelWindow : Window
         SyncApps(s.Procs);
         SyncDevices(BuildDevices(s));
         UpdateOverview();
+        // 数据回来了就把"采集端未启动"那行清掉：以前它只在轮询失败时写、没人清，
+        // 于是采集端起来了提示还一直挂着（看起来像坏了）
+        if (statusLine.Text.StartsWith("采集端", StringComparison.Ordinal)) statusLine.Text = "";
         if (!_snapLogged)
         {
             _snapLogged = true;

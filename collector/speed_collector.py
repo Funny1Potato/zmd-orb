@@ -55,7 +55,8 @@ ELEVATE_WAIT = 90.0  # 等用户点 UAC 的最长时间（秒）
 
 state = {"snapshot": None, "last_result": None, "last_clean": 0.0, "cleaning": False,
          "fault_rate": None, "auto": {}, "auto_checked": 0.0, "auto_last": 0.0,
-         "auto_count": 0, "auto_reason": ""}
+         "auto_count": 0, "auto_reason": "", "stat": {}, "procs": None, "procs_dt": None,
+         "procs_ts": 0.0}
 _fault = None        # PdhRate，main() 里创建（硬缺页率采样器）
 ntdll = ctypes.WinDLL("ntdll")
 
@@ -1383,6 +1384,25 @@ def sample_disk_io(letters):
     return res
 
 
+def load_static():
+    """静态硬件信息（要跑几次 PowerShell，几秒钟）—— 放后台线程，别让 HTTP 干等。"""
+    log("[采集端] 读取静态硬件信息 …")
+    try:
+        state["stat"] = collect_static()
+    except Exception as e:
+        log("[采集端] 静态硬件信息失败：%s" % e)
+        state["stat"] = {}
+    state["disks_static"] = state["stat"].get("disks", [])
+    state["disk_letters"] = [d["letter"] for d in state["disks_static"]]
+    log("[采集端] CPU: %s（%s 线程，基准 %s GHz / 最大 %s GHz）"
+        % (state["stat"].get("cpu_name"), state["stat"].get("cpu_threads"),
+           state["stat"].get("cpu_base"), state["stat"].get("cpu_max")))
+    log("[采集端] 显卡: %s；内存: %s %s；硬盘: %s"
+        % (state["stat"].get("gpu_name"), state["stat"].get("mem_type"),
+           state["stat"].get("mem_speed"),
+           ", ".join("%s(%s)" % (d["letter"], d["media"]) for d in state["disks_static"])))
+
+
 def slow_loop():
     """显卡与硬盘性能计数器走 1.5 秒的慢循环（照搬参考的节奏）。"""
     while True:
@@ -1635,28 +1655,14 @@ def main(gui=True, selftest=False, clean_now=None, out_path=None, kill_now=None,
         % ("开" if state["auto"]["enabled"] else "关", state["auto"]["threshold_mb"],
            state["auto"]["check_secs"], state["auto"]["min_gap_secs"]))
 
-    # 设备页要的静态硬件信息（照搬 zmd-manager：PowerShell 取一次，几秒钟）
-    log("[采集端] 读取静态硬件信息 …")
-    try:
-        state["stat"] = collect_static()
-    except Exception as e:
-        log("[采集端] 静态硬件信息失败：%s" % e)
-        state["stat"] = {}
-    state["disks_static"] = state["stat"].get("disks", [])
-    state["disk_letters"] = [d["letter"] for d in state["disks_static"]]
-    log("[采集端] CPU: %s（%s 线程，基准 %s GHz / 最大 %s GHz）"
-        % (state["stat"].get("cpu_name"), state["stat"].get("cpu_threads"),
-           state["stat"].get("cpu_base"), state["stat"].get("cpu_max")))
-    log("[采集端] 显卡: %s；内存: %s %s；硬盘: %s"
-        % (state["stat"].get("gpu_name"), state["stat"].get("mem_type"),
-           state["stat"].get("mem_speed"),
-           ", ".join("%s(%s)" % (d["letter"], d["media"]) for d in state["disks_static"])))
-
-    threading.Thread(target=slow_loop, daemon=True).start()
-    threading.Thread(target=sampler, daemon=True).start()
+    # 先把 HTTP 服务起起来：静态硬件信息要跑几秒 PowerShell，
+    # 放后台线程去取，别让 /snapshot 在这几秒里查无此服务（面板会误报"采集端未启动"）。
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log("[采集端] 已启动： http://127.0.0.1:%d/ （Ctrl+C 退出）" % PORT)
+    threading.Thread(target=load_static, daemon=True).start()
+    threading.Thread(target=slow_loop, daemon=True).start()
+    threading.Thread(target=sampler, daemon=True).start()
 
     if selftest:
         time.sleep(2.5)
