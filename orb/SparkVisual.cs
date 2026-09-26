@@ -172,6 +172,9 @@ sealed class SparkVisual : FrameworkElement
             mx = Math.Max(mx, v);
         }
         if (mn > mx) return (0, 100);
+        // 数据恒定（例如磁盘空闲时读写一直为 0）：退化的区间会让线画在正中，
+        // 这里退成"0 ~ 量级×1.2"，线落在底部、刻度也说得通
+        if (mx - mn <= 1e-9) return (0, Math.Max(1.0, Math.Abs(mx) * 1.2));
         double mag = Math.Max(Math.Abs(mx), Math.Abs(mn));
         double span = Math.Max((mx - mn) * 1.25, mag * 0.12);
         if (isPercent) span = Math.Max(span, 1.0);

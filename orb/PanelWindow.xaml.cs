@@ -30,6 +30,7 @@ public partial class PanelWindow : Window
     double _sysCpu, _memPct, _maxOcc = 32768, _commitLimitMb = 32768;   // 最大占用 = 提交额度上限或自定义值（MB）
     int _page;
     bool _polling, _quitting, _cleaning, _autoBusy, _procBusy, _killing, _procLogged, _appsHidden, _snapLogged;
+    int _snapCount;
     long _lastFrame;
 
     // ---- 页1 应用概况 / 页2 设备 ----
@@ -185,10 +186,17 @@ public partial class PanelWindow : Window
                      + $"内存={_memPct:F1}% 上限={_maxOcc:F0}MB 应用={s.Procs.Count} 设备={_devices.Count} "
                      + $"显卡={s.Gpu.Name}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
             foreach (var d in _devices)
-                Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}");
+                Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}"
+                         + $"｜主 {d.Util:F2}{d.AxisUnit1} 次 {d.Linev:F2}{d.AxisUnit2}");
             Diag.Log($"面板：应用内存页 {_memRows.Count} 行（候选 {s.Procs.Count} 个进程，聚合后 "
                      + $"{_appMem.Count} 个应用）："
                      + string.Join("、", _memRows.Take(12).Select(r => $"{r.Name}({r.MemVal})")));
+        }
+        _snapCount++;
+        if (_snapCount == 6)      // 第 6 帧再打一次，用来核对两个指标是否都在推进
+        {
+            foreach (var d in _devices)
+                Diag.Log($"面板：设备指标(第6帧) {d.Name}｜主 {d.Util:F2}{d.AxisUnit1}｜次 {d.Linev:F2}{d.AxisUnit2}");
         }
 
         // ---- 页3：内存指标 + 自动整理 ----
@@ -579,6 +587,9 @@ public partial class PanelWindow : Window
                 t.Cur2Val = list[i].Cur2Val;
                 t.Detail = list[i].Detail;
                 t.Util = list[i].Util;
+                t.Linev = list[i].Linev;        // ← 曾经漏了这一行：次指标永远停在首帧值，蓝线是直线
+                t.DualAxis = list[i].DualAxis;
+                t.AxisUnit2 = list[i].AxisUnit2;
             }
         }
         foreach (var d in _devices)
