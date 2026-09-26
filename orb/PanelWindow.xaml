@@ -700,9 +700,9 @@
                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                   </Grid>
-                  <!-- 占用率走势（黄柱图） -->
-                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" Height="66"
-                                     Margin="10,0,14,0"/>
+                  <!-- 占用率走势（折线；纵轴按数据缩放，两条线类型不同的走左右双轴） -->
+                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}"
+                                     AutoScale="True" Height="66" Margin="10,0,14,0"/>
                   <!-- 当前数据两行：小圆点颜色与走势图的线一一对应（主指标黄、次指标蓝） -->
                   <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">

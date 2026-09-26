@@ -308,7 +308,8 @@ def top_apps(rows):
     内存大户就根本不在列表里了。所以这里只做活跃度过滤 + 一个宽上限，
     "显示几条（app_limit）"与"按哪列排"都由面板决定。
     """
-    keep = [p for p in rows if p["pid"] != 0 and not (p["cpu"] < 0.5 and p["mem_mb"] < 40)]
+    keep = [p for p in rows if p["pid"] != 0
+            and not (p["cpu"] < PROC_MIN_CPU and p["mem_mb"] < PROC_MIN_MB)]
     keep.sort(key=lambda p: (-p["cpu"], -p["mem_mb"]))
     return [{"pid": p["pid"], "name": p["name"], "exe": "",
              "mem": round(p["mem_mb"]), "commit": round(p.get("commit_mb", 0)), "cpu": p["cpu"],
@@ -1134,7 +1135,7 @@ def kill_process(pid, tree=False):
 
 # ---------------- 自动整理（M2）+ 显示设置（M4） ----------------
 AUTO_DEFAULTS = {"enabled": False, "threshold_mb": 2048, "check_secs": 60, "min_gap_secs": 180,
-                 "app_limit": 40}       # app_limit：应用概况列表最多几条（面板上可改）
+                 "app_limit": 60}       # app_limit：应用概况/应用内存两页各显示几条（面板上可改）
 
 
 def auto_config_path():
@@ -1237,8 +1238,12 @@ def auto_tick():
 # ---------------- 设备数据（照搬 zmd-manager 的采集口径） ----------------
 # 面板的"综合占用 / 设备性能"两页要这些东西：静态硬件只在启动取一次，显卡与硬盘性能计数器走慢循环。
 SLOW_INTERVAL = 1.5     # 慢速采样（显卡 / 硬盘性能计数器）
-PROC_LIMIT = 40         # 应用概况默认显示条数（面板可改，见 app_limit）
-APP_SEND_MAX = 200      # 应用概况候选集上限（面板要支持按内存/名称排序，所以不能只发 CPU 前 N）
+PROC_LIMIT = 60         # 应用概况默认显示条数（面板可改，见 app_limit）
+APP_SEND_MAX = 400      # 应用概况候选集上限（面板要支持按内存/名称排序，所以不能只发 CPU 前 N）
+# 候选集的"活跃度过滤"阈值：同时低于这两条的进程不进候选集。
+# 之前是 cpu<0.5% 且 mem<40MB —— 实测在空闲机器上只剩 30 个进程 / 24 个应用，
+# 导致"应用内存"页几乎看不到应用；改成 0.1%/8MB 后是 153 个进程 / 87 个应用。
+PROC_MIN_CPU, PROC_MIN_MB = 0.1, 8.0
 SUB_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5",
             27: "LPDDR", 28: "LPDDR2", 29: "LPDDR3", 30: "LPDDR4", 35: "LPDDR5"}

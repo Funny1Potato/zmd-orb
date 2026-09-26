@@ -186,6 +186,9 @@ public partial class PanelWindow : Window
                      + $"显卡={s.Gpu.Name}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
             foreach (var d in _devices)
                 Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}");
+            Diag.Log($"面板：应用内存页 {_memRows.Count} 行（候选 {s.Procs.Count} 个进程，聚合后 "
+                     + $"{_appMem.Count} 个应用）："
+                     + string.Join("、", _memRows.Take(12).Select(r => $"{r.Name}({r.MemVal})")));
         }
 
         // ---- 页3：内存指标 + 自动整理 ----
@@ -425,7 +428,8 @@ public partial class PanelWindow : Window
                 ? $"{cpu.Threads:F0} 线程"
                 : $"{cpu.Full} · {cpu.Cores:F0} 核 {cpu.Threads:F0} 线程",
             Util = cpu.Util,
-            Linev = cpu.Max > 0 ? Math.Max(0, Math.Min(100, cpu.Freq / cpu.Max * 100)) : 0,
+            // 次指标用**原始单位**（GHz），并在图上用右轴单独缩放 —— 占用率与频率不是同一类型
+            Linev = cpu.Freq, DualAxis = true, AxisUnit2 = "GHz",
             Cur1Lbl = "占用", Cur1Val = cpu.Util.ToString("F0") + "%",
             Cur2Lbl = "频率", Cur2Val = cpu.Freq.ToString("F2") + " GHz",
             Spec = $"基准 {cpu.Base:F2} GHz",
@@ -447,10 +451,9 @@ public partial class PanelWindow : Window
                 ? (gpu.MemTotal > 0 ? $"显存 {gpu.MemTotal:F1} GB" : "显卡")
                 : gpu.Full + (gpu.MemTotal > 0 ? $" · 显存 {gpu.MemTotal:F1} GB" : ""),
             Util = gpu.Util,
-            // 次指标：显存占用率（拿不到显存就退到频率/20 这个粗糙刻度）
-            Linev = gpu.MemTotal > 0 && !double.IsNaN(gpu.MemUsed)
-                ? Math.Max(0, Math.Min(100, gpu.MemUsed / gpu.MemTotal * 100))
-                : (!double.IsNaN(gpu.Freq) ? Math.Max(0, Math.Min(100, gpu.Freq / 20)) : gpu.Util),
+            // 次指标：已用显存（GB，右轴单独缩放）
+            Linev = !double.IsNaN(gpu.MemUsed) ? gpu.MemUsed : (gpu.MemTotal > 0 ? 0 : gpu.Util),
+            DualAxis = true, AxisUnit2 = "GB",
             Cur1Lbl = "占用", Cur1Val = gpu.Util.ToString("F0") + "%",
             Cur2Lbl = "显存", Cur2Val = gpu.MemTotal > 0
                 ? $"{(!double.IsNaN(gpu.MemUsed) ? gpu.MemUsed.ToString("F2") + " / " : "")}{gpu.MemTotal:F1} GB"
@@ -505,7 +508,8 @@ public partial class PanelWindow : Window
                 Sub = string.IsNullOrEmpty(d.Model)
                     ? $"已用 {d.UsedGb:F1} / {d.TotalGb:F1} GB"
                     : d.Model + (string.IsNullOrEmpty(d.Media) ? "" : " · " + d.Media),
-                Util = d.Util, Linev = Math.Max(0, Math.Min(100, rwNum / 500 * 100)),   // 次指标：读写速率（500MB/s 记作 100%）
+                Util = d.Util,
+                Linev = rwNum, DualAxis = true, AxisUnit2 = "MB/s",   // 次指标：读写速率（MB/s，右轴单独缩放）
                 Cur1Lbl = "占用", Cur1Val = d.Util.ToString("F0") + "%",
                 Cur2Lbl = "读写", Cur2Val = string.IsNullOrEmpty(d.Rw) ? "—" : d.Rw,
                 Spec = $"{d.TotalGb:F0} GB · 已用 {d.Pct:F0}%",

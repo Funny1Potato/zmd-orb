@@ -77,9 +77,13 @@ sealed class AppInfo
 /// <summary>双指标走势图的数据来源（面板与设备行的走势都用它）。</summary>
 interface ITrendRow
 {
-    List<double> Hist { get; }     // 主指标（0~100）
-    List<double> Hist2 { get; }    // 次指标（0~100）
+    List<double> Hist { get; }     // 主指标
+    List<double> Hist2 { get; }    // 次指标
     int HistTick { get; }          // 每次采样自增，绑定的图表靠它重绘
+    /// <summary>两条指标类型不同（如 占用率 vs 频率）时各自一套纵轴：左=主、右=次。</summary>
+    bool DualAxis { get; }
+    string AxisUnit1 { get; }
+    string AxisUnit2 { get; }
 }
 
 /// <summary>"应用内存"页的一行：按应用名聚合（同名多进程合并）。</summary>
@@ -99,6 +103,10 @@ sealed class AppMemRow : RowBase, ITrendRow
     public List<double> Hist { get; } = new();
     public List<double> Hist2 { get; } = new();
     public int HistTick { get; private set; }
+    // 应用内存页两条线都是"占某个总额的百分比"（类型相同）→ 共用一套纵轴
+    public bool DualAxis => false;
+    public string AxisUnit1 => "%";
+    public string AxisUnit2 => "%";
 
     public void Push(double a, double b)
     {
@@ -119,8 +127,11 @@ sealed class DeviceRow : RowBase, ITrendRow
     public string Name { get; set; } = "";
     public string Sub { get; set; } = "";
     public string Spec { get; set; } = "";
-    public double Util { get; set; }              // 主指标（走势图黄线）
-    public double Linev { get; set; }             // 次指标（走势图蓝线）
+    public double Util { get; set; }              // 主指标（占用率）
+    public double Linev { get; set; }             // 次指标（频率/显存/读写速率…按各自设备的真实单位）
+    public bool DualAxis { get; set; }            // 两条线类型不同 → 左右各一套纵轴
+    public string AxisUnit1 { get; set; } = "%";
+    public string AxisUnit2 { get; set; } = "%";
     public string Cur1Lbl { get; set; } = "";
     public string Cur1Val { get; set; } = "";
     public string Cur2Lbl { get; set; } = "";

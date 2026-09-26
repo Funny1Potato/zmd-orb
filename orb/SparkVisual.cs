@@ -90,33 +90,22 @@ sealed class SparkVisual : FrameworkElement
         if (zone < 4) return;
         dc.DrawLine(GridPen, new Point(0, padTop + zone * 0.5), new Point(w, padTop + zone * 0.5));
 
-        // 纵轴范围：默认固定 0~100%；开了按比例缩放就取两条线的实际区间（留 25% 余量，
-        // 且至少跨 2 个百分点，免得平数据被拉成锯齿）——上下界会画在左上/左下角，避免误读
-        double lo = 0, hi = 100;
-        if (AutoScale)
-        {
-            double mn = double.MaxValue, mx = double.MinValue;
-            foreach (var src in new[] { a, b })
-                foreach (var v in src)
-                {
-                    mn = Math.Min(mn, v);
-                    mx = Math.Max(mx, v);
-                }
-            if (mn > mx) { mn = 0; mx = 100; }
-            double span = Math.Max(2.0, (mx - mn) * 1.25);
-            double mid = (mx + mn) / 2;
-            hi = Math.Min(100, mid + span / 2);
-            lo = Math.Max(0, mid - span / 2);
-            if (hi - lo < 0.5) hi = Math.Min(100, lo + 2);
-        }
+        // 纵轴：默认固定 0~100%；开了缩放就按各自数据取区间。
+        // 两条线类型不同（DualAxis，例如 占用率 vs 频率）时**各自一套轴**：左轴=主指标、右轴=次指标；
+        // 类型相同（如 内存占用率 vs 提交额度占用率）就共用一套轴，否则比较会失真。
+        bool dual = row.DualAxis;
+        var (l1, h1) = AxisRange(a, AutoScale, row.AxisUnit1 == "%");
+        var (l2, h2) = dual ? AxisRange(b, AutoScale, row.AxisUnit2 == "%") : (l1, h1);
 
         double step = w / (a.Count - 1);
-        Point P(List<double> src, int i)
+        Point P(List<double> src, int i, double lo, double hi)
         {
             double v = Math.Max(lo, Math.Min(hi, src[i]));
             double f = hi > lo ? (v - lo) / (hi - lo) : 0.5;
             return new Point(i * step, padTop + zone * (1 - f));
         }
+        Point P1(int i) => P(a, i, l1, h1);
+        Point P2(int i) => P(b, i, l2, h2);
 
         // 主指标：折线 + 线下渐变
         var line = new StreamGeometry();
@@ -124,13 +113,13 @@ sealed class SparkVisual : FrameworkElement
         using (var lc = line.Open())
         using (var ac = area.Open())
         {
-            lc.BeginFigure(P(a, 0), false, false);
+            lc.BeginFigure(P1(0), false, false);
             ac.BeginFigure(new Point(0, h), true, true);
-            ac.LineTo(P(a, 0), true, false);
+            ac.LineTo(P1(0), true, false);
             for (int i = 1; i < a.Count; i++)
             {
-                lc.LineTo(P(a, i), true, false);
-                ac.LineTo(P(a, i), true, false);
+                lc.LineTo(P1(i), true, false);
+                ac.LineTo(P1(i), true, false);
             }
             ac.LineTo(new Point((a.Count - 1) * step, h), true, false);
         }
@@ -140,7 +129,7 @@ sealed class SparkVisual : FrameworkElement
         dc.DrawGeometry(AreaFill(Line1, 96, 10), null, area);
         dc.DrawGeometry(null, GlowPen(Line1, 3.4, 70), line);
         dc.DrawGeometry(null, SolidPen(Line1, 1.6), line);
-        dc.DrawEllipse(Line1, null, P(a, a.Count - 1), 2.4, 2.4);
+        dc.DrawEllipse(Line1, null, P1(a.Count - 1), 2.4, 2.4);
 
         // 次指标：只画线（不铺填充，免得两条叠在一起糊）
         if (b.Count >= 2)
@@ -148,31 +137,65 @@ sealed class SparkVisual : FrameworkElement
             var line2 = new StreamGeometry();
             using (var lc = line2.Open())
             {
-                lc.BeginFigure(P(b, 0), false, false);
-                for (int i = 1; i < b.Count; i++) lc.LineTo(P(b, i), true, false);
+                lc.BeginFigure(P2(0), false, false);
+                for (int i = 1; i < b.Count; i++) lc.LineTo(P2(i), true, false);
             }
             line2.Freeze();
             dc.DrawGeometry(null, GlowPen(Line2, 3.2, 60), line2);
             dc.DrawGeometry(null, SolidPen(Line2, 1.5), line2);
-            dc.DrawEllipse(Line2, null, P(b, b.Count - 1), 2.2, 2.2);
+            dc.DrawEllipse(Line2, null, P2(b.Count - 1), 2.2, 2.2);
         }
 
-        // 缩放模式下把上下界写出来（不放大的话 0~100 是显然的，就不标了）
+        // 缩放模式下把上下界写出来（不放大的话 0~100 是显然的，就不标了）；
+        // 双轴时左轴标主指标、右轴标次指标，各自带一个与线同色的小圆点，避免张冠李戴
         if (AutoScale)
         {
-            Label(dc, hi.ToString("F1") + "%", 3, 0);
-            Label(dc, lo.ToString("F1") + "%", 3, h - 13);
+            AxisLabel(dc, h1, row.AxisUnit1, 3, 0, Line1, false);
+            AxisLabel(dc, l1, row.AxisUnit1, 3, h - 13, Line1, false);
+            if (dual)
+            {
+                AxisLabel(dc, h2, row.AxisUnit2, w - 3, 0, Line2, true);
+                AxisLabel(dc, l2, row.AxisUnit2, w - 3, h - 13, Line2, true);
+            }
         }
+    }
+
+    /// <summary>纵轴区间：固定 0~100；缩放时按数据取（留 25% 余量、至少 12% 量级，
+    /// 百分比再留 1 个点的下限，免得平数据被拉成锯齿），并避免下探负数。</summary>
+    static (double lo, double hi) AxisRange(List<double> vals, bool auto, bool isPercent)
+    {
+        if (!auto || vals.Count == 0) return (0, 100);
+        double mn = double.MaxValue, mx = double.MinValue;
+        foreach (var v in vals)
+        {
+            mn = Math.Min(mn, v);
+            mx = Math.Max(mx, v);
+        }
+        if (mn > mx) return (0, 100);
+        double mag = Math.Max(Math.Abs(mx), Math.Abs(mn));
+        double span = Math.Max((mx - mn) * 1.25, mag * 0.12);
+        if (isPercent) span = Math.Max(span, 1.0);
+        double mid = (mx + mn) / 2;
+        double hi = mid + span / 2, lo = mid - span / 2;
+        if (lo < 0) { hi -= lo; lo = 0; }
+        if (isPercent && hi > 100) { lo -= hi - 100; hi = 100; if (lo < 0) lo = 0; }
+        return (lo, hi);
     }
 
     static readonly Brush LabelBrush = Freeze(new SolidColorBrush(Ring.Hex("#2c2c2a")));
 
-    static void Label(DrawingContext dc, string text, double x, double y)
+    static string Fmt(double v) =>
+        Math.Abs(v) >= 100 ? v.ToString("F0") : Math.Abs(v) >= 10 ? v.ToString("F1") : v.ToString("F2");
+
+    static void AxisLabel(DrawingContext dc, double v, string unit, double x, double y, Brush line,
+                          bool rightAlign)
     {
-        var ft = new FormattedText(text, System.Globalization.CultureInfo.CurrentCulture,
-                                   FlowDirection.LeftToRight,
-                                   new Typeface("Segoe UI"), 10, LabelBrush, 1.0);
-        dc.DrawText(ft, new Point(x, y));
+        var t = new FormattedText(Fmt(v) + unit, System.Globalization.CultureInfo.CurrentCulture,
+                                  FlowDirection.LeftToRight, new Typeface("Segoe UI"), 10,
+                                  LabelBrush, 1.0);
+        double tx = rightAlign ? x - t.Width : x + 9;
+        dc.DrawEllipse(line, null, new Point(rightAlign ? tx - 6 : x + 3, y + 6.5), 2.6, 2.6);
+        dc.DrawText(t, new Point(tx, y));
     }
 
     /* ---- 画刷/画笔构造（按需缓存，避免每帧新建） ---- */
