@@ -22,11 +22,6 @@
          color:#8a7a2a;opacity:0;transform:translateY(4px);
          transition:opacity .25s ease,transform .45s ease;pointer-events:none;}
   #float.on{opacity:1;transform:translateY(-10px);}
-  #badge{position:absolute;left:50%;bottom:13px;width:5px;height:5px;border-radius:50%;margin-left:-2.5px;
-         background:#cfcfc9;transition:background .3s;}
-  #badge.live{background:#8fbf7a;}
-  #badge.demo{background:#e3c25c;}
-  #badge.warn{background:#d9603a;}
 </style>
 </head>
 <body>
@@ -38,7 +33,6 @@
     <div id="sub">取数中…</div>
   </div>
   <div id="float"></div>
-  <div id="badge"></div>
 </div>
 <script src="ring.js"></script>
 <script src="api.js"></script>
@@ -74,7 +68,6 @@ const stage  = document.getElementById('stage');
 const pctEl  = document.getElementById('pct');
 const subEl  = document.getElementById('sub');
 const floatEl = document.getElementById('float');
-const badgeEl = document.getElementById('badge');
 const blobEl = document.getElementById('blob');
 
 const ring = buildRing(document.getElementById('ring'), geom);
@@ -94,12 +87,8 @@ function render() {
     const warn = commitPct >= 85;
     subEl.innerHTML = '可用 ' + (availMB / 1024).toFixed(1) + 'G' +
       (warn ? ' · <b>提交 ' + commitPct.toFixed(0) + '%</b>' : '');
-    badgeEl.className = warn ? 'warn' : 'live';
-    badgeEl.title = warn ? '提交压力偏高' : '实时数据';
   } else {
     subEl.textContent = '演示数据';
-    badgeEl.className = 'demo';
-    badgeEl.title = '采集端未启动，当前是演示数据';
   }
 }
 

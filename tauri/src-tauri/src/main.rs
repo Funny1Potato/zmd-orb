@@ -240,6 +240,28 @@ fn clip_to_circle(window: &tauri::WebviewWindow) {
     }
 }
 
+/// 窗口移动之后透明合成会失效：实机表现是窗口开始画一层浅色底，被圆形区域裁成"弧边浅色圆盘"。
+/// （2026-09-26 用受控黑底 + 逐状态截图定位：全新实例 0 个异常像素；纯粹用 SetWindowPos 移动窗口
+/// 后变成 1321 个；重新 SetWindowRgn 无效；而 InvalidateRect + UpdateWindow 即可恢复到 0。）
+/// 所以移动/改变尺寸后强制重绘一次——用重绘而不是 hide/show，避免闪屏。
+#[cfg(windows)]
+fn force_repaint(window: &tauri::WebviewWindow) {
+    use std::ffi::c_void;
+
+    extern "system" {
+        fn InvalidateRect(hwnd: *mut c_void, rect: *const c_void, erase: i32) -> i32;
+        fn UpdateWindow(hwnd: *mut c_void) -> i32;
+    }
+
+    if let Ok(h) = window.hwnd() {
+        unsafe {
+            let hwnd = h.0 as *mut c_void;
+            InvalidateRect(hwnd, std::ptr::null(), 1);
+            UpdateWindow(hwnd);
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(Backend(Mutex::new(None)))
@@ -279,12 +301,24 @@ fn main() {
                     kill_backend(&mut c);
                 }
             }
-            // 拖到不同缩放的显示器时窗口尺寸会变，圆形裁剪区域要跟着重算
+            // 球的窗口一动（拖动、换显示器、日后恢复位置）透明就会失效，必须重绘修正；
+            // 尺寸变化（拖到不同缩放的显示器）时还要重算圆形裁剪区域
             #[cfg(windows)]
             RunEvent::WindowEvent { label, event, .. } => {
-                if label == "ball" && matches!(event, tauri::WindowEvent::Resized(_)) {
-                    if let Some(ball) = app.get_webview_window("ball") {
-                        clip_to_circle(&ball);
+                if label == "ball" {
+                    match event {
+                        tauri::WindowEvent::Moved(_) => {
+                            if let Some(ball) = app.get_webview_window("ball") {
+                                force_repaint(&ball);
+                            }
+                        }
+                        tauri::WindowEvent::Resized(_) => {
+                            if let Some(ball) = app.get_webview_window("ball") {
+                                clip_to_circle(&ball);
+                                force_repaint(&ball);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
