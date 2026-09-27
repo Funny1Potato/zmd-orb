@@ -149,8 +149,10 @@ sealed class TrayIcon : IDisposable
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
             g.Clear(Color.Transparent);
 
-            float pad = Math.Max(1.2f, side * 0.075f);
-            float w = Math.Max(1.6f, side * 0.13f);                   // 环线宽
+            // 环尽量占满图标、线也粗一档（用户连着两次说"太小/太细"）：
+            // 边距 0、线宽 17%；20px 的槽里外径就是 20px，环心半径 8.3、内圈还有 13px 给数字
+            float pad = 0f;
+            float w = Math.Max(2.0f, side * 0.17f);                    // 环线宽
             var rect = new RectangleF(pad + w / 2, pad + w / 2,
                                       side - pad * 2 - w, side - pad * 2 - w);
             // 底衬（浅色）——深色任务栏上也看得清
@@ -168,7 +170,7 @@ sealed class TrayIcon : IDisposable
                     g.DrawArc(arc, rect, -90, (float)(Math.Min(359.9, p * 3.6)));
             }
 
-            // 中间数字：按位数自适应字号，保证 100% 也能塞进圆里
+            // 中间数字：按位数自适应字号，保证 100% 也能塞进圆里（环又粗了，数字跟着收一点）
             float fontPx = side * (text.Length >= 3 ? 0.36f : text.Length == 2 ? 0.44f : 0.50f);
             using var font = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel);
             var fmt = new StringFormat
