@@ -14,6 +14,11 @@ sealed class BallVisual : FrameworkElement
     struct P { public double X, Y, Z; }
 
     const int Buckets = 20;                  // 粒子透明度分档：避免每帧新建 120 个画刷
+    // 未占到段的透明度：两侧计量条细，0.35 就够；主环那条带更窄（6.5），太透会糊掉看不见，
+    // 所以单独给高一档（配 0.40 的衬底，整体约七成实、三成透）
+    const double TrackAlpha = 0.35;      // 两侧计量条的底槽
+    const double RailAlpha = 0.40;       // 主环的衬底（描边带）
+    const double RingTrackAlpha = 0.55;  // 主环未占用段
 
     readonly P[] _pts = new P[Ring.Particles];
     readonly double[] _phase = new double[Ring.Particles];
@@ -64,14 +69,15 @@ sealed class BallVisual : FrameworkElement
         _decoRightUnderG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90 - capExt, 180 + capExt);
         _decoRightTrackG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 180);
 
-        _decoUnder = Pen(Ring.Outline, Ring.WDeco + 2 * ow);
+        _decoUnder = Pen(Ring.Outline, Ring.WDeco + 2 * ow, 0.30);   // 描边带也要半透：它是"跑道"宽的实心带，
+                                                                    // 不透明的话底槽再透也透不出壁纸
         _decoLeftPen = Pen(Ring.DecoLeft, Ring.WDeco, 0.95);
         _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
-        // 没占到的那一段：各自弧色的浅色版 + 半透明（同色系，像一层薄雾打底）
-        _decoLeftTrack = Pen(Ring.DecoLeftTrack, Ring.WDeco, 0.62);
-        _decoRightTrack = Pen(Ring.DecoRightTrack, Ring.WDeco, 0.62);
-        _railPen = Pen(Ring.Outline, Ring.WTrack + 2 * ow);   // 衬底 = 轨道宽 + 两侧描边，形成均匀一圈描边
-        _trackPen = Pen(Ring.Track, Ring.WTrack);
+        // 没占到的那一段：各自弧色的浅色版 + **明显半透明**（0.35：壁纸透得上来，才是"没占到"的观感）
+        _decoLeftTrack = Pen(Ring.DecoLeftTrack, Ring.WDeco, TrackAlpha);
+        _decoRightTrack = Pen(Ring.DecoRightTrack, Ring.WDeco, TrackAlpha);
+        _railPen = Pen(Ring.Outline, Ring.WTrack + 2 * ow, RailAlpha);   // 衬底半透：不然它会挡在主环轨道下面，轨道再透也透不出壁纸
+        _trackPen = Pen(Ring.Track, Ring.WTrack, RingTrackAlpha);   // 主环未占用段：半透明，但比两侧的条实一些
         /* 中间的盘：浅色半透 + 一层细点纹理，做出"磨砂玻璃"的观感。
            真正的背景模糊（DWM 亚克力）是按整窗矩形铺的，会把当初去掉的"泛底"请回来，
            所以这里用"高光渐变 + 微点纹理"来近似磨砂，任意壁纸上都不会变成一块方雾。 */
