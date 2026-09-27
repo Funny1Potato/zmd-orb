@@ -284,9 +284,7 @@ public partial class PanelWindow : Window
     void Lite_Click(object sender, RoutedEventArgs e)
     {
         bool want = chkLite.IsChecked == true;
-        UiSettings.Lite = want;
-        UiSettings.Save();
-        (Application.Current as App)?.ApplyLite();
+        (Application.Current as App)?.SetLite(want);      // 落盘 + 立刻生效（球/托盘两个右键菜单也走同一条路）
         setHint.Text = want ? "已开轻量模式（球静止时不再重画）" : "已关轻量模式";
         Poll();                       // 立刻按新设置重排一次（面板这边主要在下一轮生效）
     }

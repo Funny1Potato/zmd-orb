@@ -68,24 +68,38 @@ sealed class TrayIcon : IDisposable
     readonly NotifyIcon _icon;
     readonly ContextMenuStrip _menu;
     readonly Action _openPanel, _clean, _toBall, _quit;
+    readonly Action<bool> _setLite;
+    readonly ToolStripMenuItem _lite;
     int _lastPct = int.MinValue;
     IntPtr _handle = IntPtr.Zero;
     bool _disposed;
 
-    public TrayIcon(Action openPanel, Action clean, Action toBall, Action quit)
+    public TrayIcon(Action openPanel, Action clean, Action toBall, Action quit, Action<bool> setLite)
     {
         _openPanel = openPanel;
         _clean = clean;
         _toBall = toBall;
         _quit = quit;
+        _setLite = setLite;
 
-        _menu = new ContextMenuStrip { ShowImageMargin = false };
+        // ShowCheckMargin：ContextMenuStrip 默认不勾选框那一列——不留的话"轻量模式"的勾根本没地方画
+        // （实测：勾上了肉眼看不出来，勾糊在文字区里）。球那边的 WPF 菜单本来就有勾选列，这样两处观感一致。
+        _menu = new ContextMenuStrip { ShowImageMargin = false, ShowCheckMargin = true };
         _menu.Items.Add(Item("打开面板", () => _openPanel()));
         _menu.Items.Add(Item("轻度整理（免提权）", () => _clean()));
         _menu.Items.Add(new ToolStripSeparator());
+        // 轻量模式：勾选状态在菜单弹出前对齐当前设置（面板勾选框与球菜单改的都是同一个值）
+        _lite = new ToolStripMenuItem("轻量模式")
+        {
+            CheckOnClick = true,
+            ToolTipText = "外观不变，省常驻内存与 CPU：球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡",
+        };
+        _lite.Click += (_, _) => _setLite(_lite.Checked);
+        _menu.Items.Add(_lite);
         _menu.Items.Add(Item("切到球模式", () => _toBall()));
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(Item("退出", () => _quit()));
+        _menu.Opening += (_, _) => _lite.Checked = UiSettings.Lite;
 
         _icon = new NotifyIcon
         {

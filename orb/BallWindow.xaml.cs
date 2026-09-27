@@ -400,6 +400,17 @@ public partial class BallWindow : Window
 
     void Menu_Clean(object sender, RoutedEventArgs e) => DoClean();
 
+    void Menu_Lite(object sender, RoutedEventArgs e)
+    {
+        // IsCheckable 的菜单项，WPF 在 Click 之前已经把 IsChecked 翻好了 —— 直接信它
+        bool want = miLite.IsChecked;
+        (Application.Current as App)?.SetLite(want);
+        Diag.Log($"球菜单：轻量模式 → {(want ? "开" : "关")}");
+    }
+
+    /// <summary>菜单弹出前把勾对齐当前设置（面板里、托盘菜单里都能改它，这里不能各说各话）。</summary>
+    void Menu_Opened(object sender, RoutedEventArgs e) => miLite.IsChecked = UiSettings.Lite;
+
     void Menu_Mode(object sender, RoutedEventArgs e) => (Application.Current as App)?.SetMode("tray");
 
     void Menu_Quit(object sender, RoutedEventArgs e) => (Application.Current as App)?.QuitApp();

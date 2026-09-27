@@ -105,7 +105,7 @@ public partial class App : Application
             _ball?.Hide();
             if (_tray == null)
             {
-                _tray = new TrayIcon(OpenPanel, CleanNow, () => SetMode("ball"), QuitApp);
+                _tray = new TrayIcon(OpenPanel, CleanNow, () => SetMode("ball"), QuitApp, SetLite);
                 // 轻量模式放宽到 3 秒：托盘图标本来就是"取整变了才重画"，1 秒一次没必要
                 _trayPoll = new DispatcherTimer
                 {
@@ -170,7 +170,15 @@ public partial class App : Application
         }
     }
 
-    /// <summary>轻量模式开关的即时生效（面板勾选后调这里，不用重启）。</summary>
+    /// <summary>轻量模式开关（面板的勾选框、两个右键菜单都走这里）：落盘 + 立刻生效，不用重启。</summary>
+    public void SetLite(bool on)
+    {
+        UiSettings.Lite = on;
+        UiSettings.Save();
+        ApplyLite();
+    }
+
+    /// <summary>轻量模式的实际生效：球那边决定要不要逐帧重画，托盘轮询跟着放宽/收紧。</summary>
     public void ApplyLite()
     {
         bool lite = UiSettings.Lite;
