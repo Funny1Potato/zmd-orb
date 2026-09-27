@@ -185,7 +185,7 @@ sealed class CleanResult
 /// <summary>面板"系统信息"页用的机器与软件环境（采集端只在启动时采一次）。</summary>
 sealed class SysInfo
 {
-    public string Host = "", Os = "", Kernel = "", Arch = "", NetAddrs = "", ProcVer = "";
+    public string Host = "", Os = "", Kernel = "", Arch = "", NetAddrs = "";
     public double BootUnix;
 }
 
@@ -309,7 +309,7 @@ static class MemoryApi
                 {
                     Host = Str(sy, "host"), Os = Str(sy, "os"), Kernel = Str(sy, "kernel"),
                     Arch = Str(sy, "arch"), NetAddrs = Str(sy, "net_addrs"),
-                    ProcVer = Str(sy, "proc_ver"), BootUnix = Num(sy, "boot"),
+                    BootUnix = Num(sy, "boot"),
                 };
             }
             return s;

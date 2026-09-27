@@ -45,6 +45,8 @@ public partial class PanelWindow : Window
 
     // ---- 页3 系统信息 ----
     string _specSig = "";
+    SpecItem? _uptimeRow;               // "运行时长"那行：它要每秒动，单独留引用
+    double _bootUnix;                   // 系统开机时刻（采集端给）
 
     public Func<double>? BallFps { get; set; }
 
@@ -637,6 +639,7 @@ public partial class PanelWindow : Window
     {
         var up = TimeSpan.FromMilliseconds(_since.ElapsedMilliseconds);
         uptime.Text = $"{(int)up.TotalHours:D2}:{up.Minutes:D2}:{up.Seconds:D2}";
+        if (_uptimeRow != null) _uptimeRow.Val = UptimeText();   // 系统运行时长跟着走（静态信息重建时不刷新）
         double sec = (DateTime.Now - _lastRefresh).TotalSeconds;
         lastRefresh.Text = sec < 3 ? "刚刚" : $"{(int)sec} 秒前";
     }
@@ -827,13 +830,13 @@ public partial class PanelWindow : Window
     void BuildSpecs(MemSnapshot s)
     {
         var sys = s.Sys;
-        string sig = $"{sys.Host}|{sys.Os}|{sys.Kernel}|{sys.Arch}|{sys.NetAddrs}|{sys.ProcVer}"
+        string sig = $"{sys.Host}|{sys.Os}|{sys.Kernel}|{sys.Arch}|{sys.NetAddrs}"
                    + $"|{s.Mem.TotalGb}|{s.Cpu.Full}|{s.Gpu.Full}|{s.Disks.Count}|{UiSettings.PollSecs}";
         if (sig == _specSig) return;      // 静态信息没变就别重建（1 秒一次的轮询不该反复重建 UI）
         _specSig = sig;
 
         var gb = s.Mem.TotalGb;
-        double up = sys.BootUnix > 0 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() - sys.BootUnix : 0;
+        _bootUnix = sys.BootUnix;
         var disks = s.Disks.Select(d => (d.Model == "" ? d.Media : d.Model + " · " + d.Media))
                            .Distinct().ToList();
         var rows = new List<SpecItem>
@@ -841,7 +844,7 @@ public partial class PanelWindow : Window
             new("主机名", sys.Host.Length > 0 ? sys.Host : "—"),
             new("操作系统", sys.Os.Length > 0 ? sys.Os : "—"),
             new("内核", $"{sys.Kernel} · {sys.Arch}"),
-            new("运行时长", up > 0 ? Dur(up) : "—"),
+            new("运行时长", UptimeText()),
             new("处理器", s.Cpu.Full.Length > 0 ? s.Cpu.Full : "—"),
             new("核心", $"{s.Cpu.Cores:F0} 核 / {s.Cpu.Threads:F0} 线程 · 基准 {s.Cpu.Base:F2} GHz"),
             new("内存", $"{gb:F1} GB · {s.Mem.Type} · {s.Mem.Speed}"
@@ -851,11 +854,10 @@ public partial class PanelWindow : Window
             new("磁盘", disks.Count > 0 ? string.Join("；", disks) : "—"),
             new("网络", (string.IsNullOrEmpty(sys.NetAddrs) ? "—" : sys.NetAddrs)
                         + (s.Net.Link > 0 ? $" · {s.Net.Link:F0} Mbps" : "")),
-            new("采集端", sys.ProcVer.Length > 0 ? sys.ProcVer : "—"),
-            new("采样", $"每 {UiSettings.PollSecs:0.##}s · 最近 180 点"),
             new("数据目录", DataDir),
             new("日志文件", System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zmd_orb_shell.log")),
         };
+        _uptimeRow = rows.First(r => r.Lbl == "运行时长");    // 这一行要每秒动，单独留个引用
         specList.ItemsSource = rows;
         sysMeta.Text = sys.Host.Length > 0 ? sys.Host + " · " + sys.Os : "";
         Diag.Log("面板：系统信息 " + rows.Count + " 项已生成（主机=" + sys.Host + " 系统=" + sys.Os
@@ -868,6 +870,13 @@ public partial class PanelWindow : Window
         var t = TimeSpan.FromSeconds(Math.Max(0, secs));
         string clock = $"{(int)t.TotalHours % 24:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
         return (int)t.TotalDays > 0 ? $"{(int)t.TotalDays}天 {clock}" : clock;
+    }
+
+    /// <summary>系统运行时长（开机至今）。静态信息不会变，所以这一行由 TickUi 每 0.5 秒刷新。</summary>
+    string UptimeText()
+    {
+        if (_bootUnix <= 0) return "—";
+        return Dur(DateTimeOffset.UtcNow.ToUnixTimeSeconds() - _bootUnix);
     }
 
     /* ---- 杂项 ---- */
@@ -912,11 +921,22 @@ class RowBase : INotifyPropertyChanged
     public void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
 }
 
-/// <summary>系统信息网格里的一行（绑定用，必须是属性）。</summary>
-sealed class SpecItem
+/// <summary>系统信息网格里的一行（绑定用：必须是属性；值可变，所以继承可通知基类）。</summary>
+sealed class SpecItem : RowBase
 {
+    string _val = "";
     public string Lbl { get; set; } = "";
-    public string Val { get; set; } = "";
+    public string Val
+    {
+        get => _val;
+        set
+        {
+            if (_val == value) return;      // 值没变就别触发绑定刷新
+            _val = value;
+            Notify();
+        }
+    }
+
     public SpecItem(string lbl, string val) { Lbl = lbl; Val = val; }
 }
 
