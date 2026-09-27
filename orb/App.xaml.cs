@@ -12,7 +12,8 @@ public partial class App : Application
 {
     BackendProcess? _backend;
     BallWindow? _ball;
-    PanelWindow? _panel;
+    PanelWindow? _panel;         // 懒构造；用户收起后置空并释放，下次打开重建
+    int _panelPage;              // 上次收起面板时停在哪一页（重建后接着停那儿）
     TrayIcon? _tray;
     DispatcherTimer? _trayPoll;
     Mutex? _mutex;
@@ -188,15 +189,42 @@ public partial class App : Application
         Diag.Log($"*** 轻量模式 = {(lite ? "开（不画粒子团/辉光，球静止不重画，采集按需）" : "关")}");
     }
 
+    /// <summary>刷新间隔改了之后同时应用到球与面板（这个设置以前只对面板生效）。</summary>
+    public void ApplyPollSecs()
+    {
+        _ball?.ApplyPollSecs();
+        _panel?.ApplyPollSecs();
+    }
+
     public void OpenPanel()
     {
         if (_panel == null)                        // 懒构造：不打开就不建那棵视觉树
         {
-            _panel = new PanelWindow { BallFps = () => _ball?.BlobFps ?? 0 };
-            Diag.Log("面板：首次打开，按需构造");
+            _panel = NewPanel();
+            Diag.Log("面板：按需构造");
         }
         _panel.Show();
         _panel.Activate();
+    }
+
+    /// <summary>构造面板，并接管"收起来就释放"：把那棵四页视觉树、图表数据、行对象整份交还给 GC
+    /// （实测面板值 ~25 MB 私有，其中写合并 ~22 MB）。下次打开重新构造，并接着停在原来那一页。
+    /// 注意 `CompositionTarget.Rendering` 是**静态事件**，不摘掉的话这个实例永远活着。</summary>
+    PanelWindow NewPanel()
+    {
+        var p = new PanelWindow { BallFps = () => _ball?.BlobFps ?? 0, StartPage = _panelPage };
+        p.IsVisibleChanged += (_, _) =>
+        {
+            if (p.IsVisible || !ReferenceEquals(_panel, p)) return;   // 第二次触发（Close 时）直接不管
+            _panelPage = p.Page;                   // 记住停在哪一页
+            _panel = null;
+            p.Shutdown();
+            GC.Collect();                          // 用户主动收起来的，立刻把那棵树回收掉
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Diag.Log($"面板：已收起并释放（停在第 {_panelPage + 1} 页，下次打开重新构造）");
+        };
+        return p;
     }
 
     public void QuitApp()

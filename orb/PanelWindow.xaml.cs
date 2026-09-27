@@ -83,6 +83,7 @@ public partial class PanelWindow : Window
             PreviewKeyDown += OnPreviewKeyDown;
             _poll.Start();
             _tick.Start();
+            if (StartPage != 0) ShowPage(StartPage);   // 上次收起时停在哪一页，就接着停那儿
             Poll();
             _ = LoadLastResultAsync();
         };
@@ -102,6 +103,13 @@ public partial class PanelWindow : Window
     void Tab_Click(object sender, RoutedEventArgs e)
     {
         int idx = sender == tabPerf ? 1 : sender == tabMem ? 2 : sender == tabOrb ? 3 : 0;
+        ShowPage(idx);
+    }
+
+    /// <summary>切到第 idx 页（0=综合占用 1=设备性能 2=应用内存 3=整理与系统信息）。
+    /// 抽出来是为了"重新构造面板时接着停在上次那一页"。</summary>
+    void ShowPage(int idx)
+    {
         if (idx == _page) return;
         _page = idx;
         tabOverview.Tag = idx == 0 ? "active" : null;
@@ -279,6 +287,26 @@ public partial class PanelWindow : Window
         setHint.Text = want ? "已切到托盘模式" : "已切回桌面悬浮球";
     }
 
+    /// <summary>收起面板交给 App 处理（App 会把实例置空并释放整棵树）。</summary>
+    public int Page => _page;
+
+    /// <summary>重新构造时接着停在这一页（0 = 首页）。</summary>
+    public int StartPage { get; set; }
+
+    /// <summary>刷新间隔改了之后应用（球那边也走这条）。</summary>
+    public void ApplyPollSecs() => _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
+
+    /// <summary>把整棵视觉树交还给 GC：先摘掉**静态事件**（CompositionTarget.Rendering，
+    /// 不摘的话这个实例永远活着），再停表、放开关闭拦截、关掉窗口。</summary>
+    public void Shutdown()
+    {
+        CompositionTarget.Rendering -= OnFrame;
+        _poll.Stop();
+        _tick.Stop();
+        _quitting = true;                      // 别让 OnClosing 再把这次关闭拦下来
+        Close();
+    }
+
     /// <summary>轻量模式开关改了之后让页面重画一次：粒子团/辉光是"画不画"上关的，
     /// 不主动重画的话，上一次带辉光的画面会一直留在屏幕上（轮询的取值守卫不会碰它）。</summary>
     public void RefreshVisuals()
@@ -314,7 +342,7 @@ public partial class PanelWindow : Window
         if (wCpu + wMem > 0) { UiSettings.WCpu = wCpu; UiSettings.WMem = wMem; }   // 全 0 就保持原值
         UiSettings.PollSecs = Math.Min(10, Math.Max(0.3, poll));
         UiSettings.Save();
-        _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
+        (Application.Current as App)?.ApplyPollSecs();      // 球也一起改（以前只改面板）
 
         var a = await MemoryApi.SetAutoAsync(null, threshold, check, gap, Math.Max(1, appLimit));
         setHint.Text = a == null ? "采集端那边的设置没保存上" : "已保存";
@@ -332,7 +360,7 @@ public partial class PanelWindow : Window
         UiSettings.WMem = 0.6;
         UiSettings.PollSecs = 1.0;
         UiSettings.Save();
-        _poll.Interval = TimeSpan.FromSeconds(1.0);
+        (Application.Current as App)?.ApplyPollSecs();      // 球也一起改
         await MemoryApi.SetAutoAsync(null, 2048, 60, 180, 40);
         setMaxOcc.Text = UiSettings.DefaultMaxOccMb.ToString("F0");
         setWCpu.Text = "0.4";
