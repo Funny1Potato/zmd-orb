@@ -16,21 +16,20 @@ namespace ZmdOrb;
 /// 面板。界面照搬 zmd-manager（终末地管理器）：
 ///   页1 综合占用（470px 圆环 + 应用概况列表 + 底部信息条）
 ///   页2 设备性能（设备行 + 占用率走势柱 + 型号与规格覆盖页）
-///   页3 整理与进程（zmd-orb 自己的：三级整理、内存指标、自动整理、进程表与结束进程）
+///   页3 整理与系统信息（zmd-orb 自己的：三级整理、内存指标、自动整理、机器/软件环境）
 /// 实时数据来自本机采集端 http://127.0.0.1:8910/snapshot（字段与参考的采集端口径一致）。
 /// </summary>
 public partial class PanelWindow : Window
 {
     // ---- 数据源 ----
     readonly DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(1) };
-    readonly DispatcherTimer _procTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly Stopwatch _since = Stopwatch.StartNew();
     DateTime _lastRefresh = DateTime.Now;
     double _sysCpu, _memPct, _usedMb, _committedMb;                      // 已占用内存 / 已提交（MB）
     double _maxOcc = UiSettings.DefaultMaxOccMb, _commitLimitMb = 32768; // 综合占用的分母：100% 对应的 MB
     int _page;
-    bool _polling, _quitting, _cleaning, _autoBusy, _procBusy, _killing, _procLogged, _appsHidden, _snapLogged;
+    bool _polling, _quitting, _cleaning, _autoBusy, _appsHidden, _snapLogged;
     int _snapCount;
     long _lastFrame;
 
@@ -44,10 +43,8 @@ public partial class PanelWindow : Window
     List<DeviceRow> _devices = new();
     string _devSig = "";
 
-    // ---- 页3 进程表 ----
-    List<ProcRow> _procAll = new();
-    string _sortPath = "Mem";
-    bool _sortDesc = true;
+    // ---- 页3 系统信息 ----
+    string _specSig = "";
 
     public Func<double>? BallFps { get; set; }
 
@@ -65,13 +62,11 @@ public partial class PanelWindow : Window
         _poll.Start();
         _tick.Tick += (_, _) => TickUi();
         _tick.Start();
-        _procTimer.Tick += async (_, _) => await LoadProcsAsync();
         CompositionTarget.Rendering += OnFrame;
         IsVisibleChanged += (_, _) =>
         {
             if (IsVisible)
             {
-                _procLogged = false;
                 _poll.Start();
                 _tick.Start();
             }
@@ -79,7 +74,6 @@ public partial class PanelWindow : Window
             {
                 _poll.Stop();          // 收起来就别采了
                 _tick.Stop();
-                _procTimer.Stop();
             }
         };
         Loaded += (_, _) =>
@@ -130,9 +124,7 @@ public partial class PanelWindow : Window
         tt.BeginAnimation(TranslateTransform.YProperty,
             new DoubleAnimation(0, TimeSpan.FromMilliseconds(360)) { EasingFunction = EaseOut() });
 
-        if (idx == 3) _procTimer.Start();
-        else _procTimer.Stop();
-        string[] pageNames = { "综合占用", "设备性能", "应用内存", "整理与进程" };
+        string[] pageNames = { "综合占用", "设备性能", "应用内存", "整理与系统信息" };
         Diag.Log($"面板：切到第 {idx + 1} 页（{pageNames[idx]}）");
     }
 
@@ -178,6 +170,7 @@ public partial class PanelWindow : Window
         SyncApps(s.Procs);
         SyncDevices(BuildDevices(s));
         SyncMem(s);
+        BuildSpecs(s);
         UpdateOverview();
         // 数据回来了就把"采集端未启动"那行清掉：以前它只在轮询失败时写、没人清，
         // 于是采集端起来了提示还一直挂着（看起来像坏了）
@@ -824,119 +817,57 @@ public partial class PanelWindow : Window
             lastResult.Text = $"最近一次（{r.Tier}）：{r.Detail}";
     }
 
-    /* ---- 进程表 ---- */
+    /* ---- 系统信息（格式照 nonebot-plugin-status-zmd 的 specs 网格：
+       两列，标签在左、值在右，行底一条虚线；数据来自采集端 sys 块 + 壳自己的落盘路径） ---- */
 
-    async System.Threading.Tasks.Task LoadProcsAsync()
-    {
-        if (_procBusy || _killing || !IsVisible) return;
-        _procBusy = true;
-        try
-        {
-            var list = await MemoryApi.ProcessesAsync();
-            if (list == null)
-            {
-                procCount.Text = "采集端未启动";
-                return;
-            }
-            _procAll = list;
-            RefreshGrid();
-            if (!_procLogged)
-            {
-                _procLogged = true;
-                Diag.Log($"面板：进程表已加载 {list.Count} 个进程，最大内存 "
-                         + (list.Count > 0 ? list[0].Name + " " + list[0].MemVal + list[0].MemUnit : "—"));
-            }
-        }
-        finally { _procBusy = false; }
-    }
+    static readonly string DataDir =
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                               "zmd-orb");
 
-    void RefreshGrid()
+    void BuildSpecs(MemSnapshot s)
     {
-        string q = procSearch.Text.Trim();
-        IEnumerable<ProcRow> rows = _procAll;
-        if (q.Length > 0)
+        var sys = s.Sys;
+        string sig = $"{sys.Host}|{sys.Os}|{sys.Kernel}|{sys.Arch}|{sys.NetAddrs}|{sys.ProcVer}"
+                   + $"|{s.Mem.TotalGb}|{s.Cpu.Full}|{s.Gpu.Full}|{s.Disks.Count}|{UiSettings.PollSecs}";
+        if (sig == _specSig) return;      // 静态信息没变就别重建（1 秒一次的轮询不该反复重建 UI）
+        _specSig = sig;
+
+        var gb = s.Mem.TotalGb;
+        double up = sys.BootUnix > 0 ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() - sys.BootUnix : 0;
+        var disks = s.Disks.Select(d => (d.Model == "" ? d.Media : d.Model + " · " + d.Media))
+                           .Distinct().ToList();
+        var rows = new List<SpecItem>
         {
-            rows = rows.Where(r => r.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
-                                || r.Pid.ToString() == q);
-        }
-        double maxCpu = Math.Max(5.0, _procAll.Count > 0 ? _procAll.Max(r => r.Cpu) : 1.0);
-        double maxMem = Math.Max(200.0, _procAll.Count > 0 ? _procAll.Max(r => r.MemMb) : 1.0);
-        foreach (var r in _procAll)
-        {
-            r.CpuBar = Math.Min(86.0, Math.Max(2.0, r.Cpu / maxCpu * 86.0));
-            r.MemBar = Math.Min(86.0, Math.Max(2.0, r.MemMb / maxMem * 86.0));
-        }
-        Func<ProcRow, object> key = _sortPath switch
-        {
-            "Name" => r => r.Name,
-            "Cpu" => r => r.Cpu,
-            "Threads" => r => r.Threads,
-            _ => r => r.MemMb,
+            new("主机名", sys.Host.Length > 0 ? sys.Host : "—"),
+            new("操作系统", sys.Os.Length > 0 ? sys.Os : "—"),
+            new("内核", $"{sys.Kernel} · {sys.Arch}"),
+            new("运行时长", up > 0 ? Dur(up) : "—"),
+            new("处理器", s.Cpu.Full.Length > 0 ? s.Cpu.Full : "—"),
+            new("核心", $"{s.Cpu.Cores:F0} 核 / {s.Cpu.Threads:F0} 线程 · 基准 {s.Cpu.Base:F2} GHz"),
+            new("内存", $"{gb:F1} GB · {s.Mem.Type} · {s.Mem.Speed}"
+                        + (s.Mem.PerGb > 0 ? $" · {s.Mem.Modules:F0} × {s.Mem.PerGb:F0} GB" : "")),
+            new("显卡", (s.Gpu.Full.Length > 0 ? s.Gpu.Full : "—")
+                        + (s.Gpu.MemTotal > 0 ? $" · 显存 {s.Gpu.MemTotal:F1} GB" : "")),
+            new("磁盘", disks.Count > 0 ? string.Join("；", disks) : "—"),
+            new("网络", (string.IsNullOrEmpty(sys.NetAddrs) ? "—" : sys.NetAddrs)
+                        + (s.Net.Link > 0 ? $" · {s.Net.Link:F0} Mbps" : "")),
+            new("采集端", sys.ProcVer.Length > 0 ? sys.ProcVer : "—"),
+            new("采样", $"每 {UiSettings.PollSecs:0.##}s · 最近 180 点"),
+            new("数据目录", DataDir),
+            new("日志文件", System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zmd_orb_shell.log")),
         };
-        var ordered = (_sortDesc ? rows.OrderByDescending(key) : rows.OrderBy(key)).ToList();
-        int? keep = (procList.SelectedItem as ProcRow)?.Pid;
-        procList.ItemsSource = ordered;
-        if (keep != null)
-        {
-            var again = ordered.FirstOrDefault(r => r.Pid == keep);
-            if (again != null) procList.SelectedItem = again;
-        }
-        string arrow = _sortDesc ? " ▾" : " ▴";
-        headName.Text = "进程名称" + (_sortPath == "Name" ? arrow : "");
-        headCpu.Text = "CPU 占用" + (_sortPath == "Cpu" ? arrow : "");
-        headMem.Text = "内存占用" + (_sortPath == "Mem" ? arrow : "");
-        procCount.Text = q.Length > 0
-            ? $"筛选出 {ordered.Count} / {_procAll.Count} 个进程"
-            : $"{_procAll.Count} 个进程 · 每 2 秒刷新（CPU% 是这两秒的均值，第一次打开都是 0）";
+        specList.ItemsSource = rows;
+        sysMeta.Text = sys.Host.Length > 0 ? sys.Host + " · " + sys.Os : "";
+        Diag.Log("面板：系统信息 " + rows.Count + " 项已生成（主机=" + sys.Host + " 系统=" + sys.Os
+                 + " 内核=" + sys.Kernel + " " + sys.Arch + "）");
     }
 
-    void Sort_Name(object sender, MouseButtonEventArgs e) => SetSort("Name");
-    void Sort_Cpu(object sender, MouseButtonEventArgs e) => SetSort("Cpu");
-    void Sort_Mem(object sender, MouseButtonEventArgs e) => SetSort("Mem");
-
-    void SetSort(string path)
+    /// <summary>时长文本：不足一天只给 HH:MM:SS（与参考项目 format_duration 一致）。</summary>
+    static string Dur(double secs)
     {
-        _sortDesc = path == _sortPath ? !_sortDesc : path != "Name";
-        _sortPath = path;
-        RefreshGrid();
-    }
-
-    void Search_TextChanged(object sender, TextChangedEventArgs e) => RefreshGrid();
-
-    async void RefreshProc_Click(object sender, RoutedEventArgs e) => await LoadProcsAsync();
-
-    async void Kill_Click(object sender, RoutedEventArgs e)
-    {
-        if (_killing) return;
-        if (procList.SelectedItem is not ProcRow row)
-        {
-            statusLine.Text = "先在进程表里点选一个进程。";
-            return;
-        }
-        bool tree = TreeChk.IsChecked == true;
-        var ok = MessageBox.Show(this,
-            $"确定结束 {row.Name}（pid {row.Pid}）{(tree ? "及其子孙进程" : "")}？\n\n该进程没保存的数据会丢。",
-            "结束进程", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-        if (ok != MessageBoxResult.OK) return;
-
-        _killing = true;
-        BtnKill.IsEnabled = false;
-        statusLine.Text = $"正在结束 {row.Name}（pid {row.Pid}）{(tree ? "及子孙" : "")}…";
-        Diag.Log($"面板：结束进程 {row.Name}({row.Pid}) tree={tree}");
-        try
-        {
-            var r = await MemoryApi.KillAsync(row.Pid, tree);
-            statusLine.Text = r.Ok
-                ? (string.IsNullOrEmpty(r.Summary) ? "已结束" : r.Summary)
-                : "没能结束：" + (string.IsNullOrEmpty(r.Error) ? "未知原因" : r.Error);
-            Diag.Log($"面板：结束进程结果 → {statusLine.Text}");
-        }
-        finally
-        {
-            _killing = false;
-            BtnKill.IsEnabled = true;
-        }
-        await LoadProcsAsync();
+        var t = TimeSpan.FromSeconds(Math.Max(0, secs));
+        string clock = $"{(int)t.TotalHours % 24:D2}:{t.Minutes:D2}:{t.Seconds:D2}";
+        return (int)t.TotalDays > 0 ? $"{(int)t.TotalDays}天 {clock}" : clock;
     }
 
     /* ---- 杂项 ---- */
@@ -979,6 +910,14 @@ class RowBase : INotifyPropertyChanged
     public event PropertyChangedEventHandler? PropertyChanged;
     /// <summary>通知"整行都变了"（空属性名 = 所有绑定刷新）。</summary>
     public void Notify() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
+}
+
+/// <summary>系统信息网格里的一行（绑定用，必须是属性）。</summary>
+sealed class SpecItem
+{
+    public string Lbl { get; set; } = "";
+    public string Val { get; set; } = "";
+    public SpecItem(string lbl, string val) { Lbl = lbl; Val = val; }
 }
 
 /// <summary>应用概况列表的一行。</summary>

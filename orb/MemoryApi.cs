@@ -23,6 +23,7 @@ sealed class MemSnapshot
     public NetInfo Net = new();
     public List<DiskInfo> Disks = new();
     public List<AppInfo> Procs = new();
+    public SysInfo Sys = new();
 
     // 自动整理（M2）
     public bool AutoEnabled;
@@ -181,33 +182,11 @@ sealed class CleanResult
     public double PurgedGb => Math.Max(0, -StandbyDeltaMb) / 1024.0;
 }
 
-/// <summary>进程表里的一行（对应采集端 /processes 的一条）。
-/// 列表面板照 zmd-manager 的样式：深色斜切图标方块（取首字母）+ 名称/副标题两行 +
-/// 右侧数值（单位着色）+ 行内迷你条。</summary>
-sealed class ProcRow
+/// <summary>面板"系统信息"页用的机器与软件环境（采集端只在启动时采一次）。</summary>
+sealed class SysInfo
 {
-    public int Pid { get; set; }
-    public string Name { get; set; } = "";
-    public double MemMb { get; set; }
-    public double Cpu { get; set; }
-    public int Threads { get; set; }
-    public bool Guarded { get; set; }
-
-    public string Initial => string.IsNullOrEmpty(Name) ? "?" : Name.Substring(0, 1).ToUpperInvariant();
-    public string Sub => $"pid {Pid} · {Threads} 线程" + (Guarded ? " · 受保护" : "");
-    public string CpuText => Cpu <= 0.05 ? "0.0" : Cpu.ToString("F1");
-    public string MemVal => MemMb >= 1024 ? (MemMb / 1024).ToString("F1") : MemMb.ToString("F0");
-    public string MemUnit => MemMb >= 1024 ? "GB" : "MB";
-    /// <summary>行内迷你条的宽度（像素，最长条 = 86）。</summary>
-    public double CpuBar { get; set; } = 2;
-    public double MemBar { get; set; } = 2;
-}
-
-/// <summary>写操作的结果（结束进程等）。</summary>
-sealed class ActionResult
-{
-    public bool Ok;
-    public string Summary = "", Error = "";
+    public string Host = "", Os = "", Kernel = "", Arch = "", NetAddrs = "", ProcVer = "";
+    public double BootUnix;
 }
 
 static class MemoryApi
@@ -215,7 +194,7 @@ static class MemoryApi
     const string BaseUrl = "http://127.0.0.1:8910";
     const string ShellToken = "zmd-orb-shell";
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMilliseconds(1500) };
-    // 整理/结束进程可能要等用户点 UAC（采集端的提权等待上限是 90s），所以这两条链路的超时放宽
+    // 整理要等用户点 UAC（采集端的提权等待上限是 90s），所以这条链路的超时放宽
     static readonly HttpClient HttpAction = new() { Timeout = TimeSpan.FromSeconds(150) };
 
     /// <summary>写操作要带这个头：采集端据此拒绝"网页脚本偷偷发过来的"写请求。</summary>
@@ -224,58 +203,6 @@ static class MemoryApi
         var r = new HttpRequestMessage(method, BaseUrl + path);
         r.Headers.Add("X-Zmd-Orb", ShellToken);
         return r;
-    }
-
-    public static async Task<List<ProcRow>?> ProcessesAsync()
-    {
-        try
-        {
-            using var resp = await Http.GetAsync(BaseUrl + "/processes");
-            if (!resp.IsSuccessStatusCode) return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            if (!doc.RootElement.TryGetProperty("procs", out var arr) || arr.ValueKind != JsonValueKind.Array)
-                return null;
-            var list = new System.Collections.Generic.List<ProcRow>(512);
-            foreach (var p in arr.EnumerateArray())
-            {
-                list.Add(new ProcRow
-                {
-                    Pid = (int)Num(p, "pid"),
-                    Name = Str(p, "name"),
-                    MemMb = Num(p, "mem_mb"),
-                    Cpu = Num(p, "cpu"),
-                    Threads = (int)Num(p, "threads"),
-                    Guarded = p.TryGetProperty("guarded", out var g) && g.ValueKind == JsonValueKind.True,
-                });
-            }
-            return list;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>结束进程；tree=true 连子孙一起（采集端在权限不足时会按需提权再试）。</summary>
-    public static async Task<ActionResult> KillAsync(int pid, bool tree)
-    {
-        try
-        {
-            using var resp = await HttpAction.SendAsync(
-                Req(HttpMethod.Post, $"/kill?pid={pid}&tree={(tree ? 1 : 0)}"));
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            var root = doc.RootElement;
-            return new ActionResult
-            {
-                Ok = root.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True,
-                Summary = Str(root, "summary"),
-                Error = Str(root, "error"),
-            };
-        }
-        catch (Exception ex)
-        {
-            return new ActionResult { Ok = false, Error = "连不上采集端（" + ex.GetType().Name + "）" };
-        }
     }
 
     public static async Task<MemSnapshot?> GetAsync()
@@ -375,6 +302,15 @@ static class MemoryApi
                         Title = Str(p, "title"), Cpu = Num(p, "cpu"), MemMb = Num(p, "mem"),
                         CommitMb = Num(p, "commit"),
                     });
+            }
+            if (root.TryGetProperty("sys", out var sy) && sy.ValueKind == JsonValueKind.Object)
+            {
+                s.Sys = new SysInfo
+                {
+                    Host = Str(sy, "host"), Os = Str(sy, "os"), Kernel = Str(sy, "kernel"),
+                    Arch = Str(sy, "arch"), NetAddrs = Str(sy, "net_addrs"),
+                    ProcVer = Str(sy, "proc_ver"), BootUnix = Num(sy, "boot"),
+                };
             }
             return s;
         }

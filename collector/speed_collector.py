@@ -22,7 +22,8 @@
   必须管理员：NtSetSystemInformation(0x50, 4/5) 清待命、 (0x50, 2) 全系统清工作集、SetSystemFileCacheSize
   无提权时它们返回 0xC0000061 STATUS_PRIVILEGE_NOT_HELD / GetLastError()=5，壳会按需弹一次 UAC。
 
-进程结束（POST /kill）留到 M3 和面板进程表一起做——没有进程表它没处可用。
+进程结束（POST /kill）与进程枚举（GET /processes）留在这里：面板第 4 页已按反馈改成"系统信息"、
+不再调用它们，但命令行（--kill-now / --tree）与 HTTP 直接调用仍可用。
 
 M2 加了：硬缺页率（PDH，进程内读 \Memory\Pages Input/sec）+ 自动整理。
 自动整理**只做 l1**（免提权，永不弹 UAC），策略是"空闲+零页低于阈值就轻度整理"，
@@ -399,6 +400,11 @@ def build_snapshot(mem, rows):
                 "down": round(down, 2), "up": round(up, 2),
                 "link": link, "util": round(min(100.0, max(down, up) / link * 100), 1)},
         "procs": top_apps(rows),
+        # 面板"系统信息"页：机器与软件环境（静态，只取一次）
+        "sys": {"host": stat.get("host"), "os": stat.get("os_name"),
+                "kernel": stat.get("kernel"), "arch": stat.get("arch"),
+                "boot": stat.get("boot"), "net_addrs": stat.get("net_addrs"),
+                "proc_ver": stat.get("proc_ver")},
     }
 
 
@@ -1294,9 +1300,58 @@ def tidy_name(s):
     return " ".join(s.split()).strip()
 
 
+def _windows_name():
+    """系统名：注册表的 ProductName 在 Win11 上仍写着 "Windows 10"，按 build ≥ 22000 校正；
+    拿不到注册表就退回 platform 的读数。"""
+    try:
+        r = as_list(_ps_json("Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' "
+                             "| Select-Object ProductName,DisplayVersion,CurrentBuild", 8))
+        d = r[0] if r else {}
+        name = (d.get("ProductName") or "").strip()
+        ver = (d.get("DisplayVersion") or "").strip()
+        build = str(d.get("CurrentBuild") or "").strip()
+        if name and build.isdigit() and int(build) >= 22000:
+            name = name.replace("Windows 10", "Windows 11")
+        parts = [p for p in (name, ver) if p]
+        if parts:
+            return " · ".join(parts)
+    except Exception as e:
+        log("[采集端] 读系统版本失败：%s" % e)
+    return "%s %s" % (platform.system(), platform.release())
+
+
+def _net_addrs():
+    """本机 IPv4（跳过环回/虚拟网卡/169.254 自分配），拿去面板"系统信息"里显示。"""
+    out = []
+    try:
+        for nic, lst in (psutil.net_if_addrs() or {}).items():
+            if re.search(r"loopback|virtual|vmware|hyper-v|teredo|isatap|bluetooth", nic, re.I):
+                continue
+            for a in lst:
+                ip = getattr(a, "address", "") or ""
+                if a.family == 2 and re.match(r"^\d+\.\d+\.\d+\.\d+$", ip) and not ip.startswith("169.254."):
+                    if ip not in out:
+                        out.append(ip)
+    except Exception as e:
+        log("[采集端] 读 IP 失败：%s" % e)
+    return ", ".join(out[:3]) or "—"
+
+
 def collect_static():
     """CPU / 内存条 / 显卡 / 网卡 / 硬盘映射 —— 只在启动时取一次。"""
     s = {}
+    # 面板"系统信息"页要用的机器与软件环境（一次取好，之后不再变）
+    s["host"] = platform.node() or os.environ.get("COMPUTERNAME") or "—"
+    s["os_name"] = _windows_name()
+    s["kernel"] = platform.version()      # Windows 上 release() 只给"10"，version() 才是 10.0.22631
+    s["arch"] = platform.machine() or "—"
+    try:
+        s["boot"] = int(psutil.boot_time())
+    except Exception:
+        s["boot"] = 0
+    s["proc_ver"] = "%s · Python %s · pid %d" % (
+        os.path.basename(sys.executable or "python"), platform.python_version(), os.getpid())
+    s["net_addrs"] = _net_addrs()
     cpu = as_list(_ps_json("Get-CimInstance Win32_Processor | "
                            "Select-Object Name,MaxClockSpeed,NumberOfCores,NumberOfLogicalProcessors"))
     cpu = cpu[0] if cpu else {}

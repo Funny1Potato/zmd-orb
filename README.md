@@ -4,7 +4,8 @@
 
 > **状态：M3 完成。** 已有：双窗口壳（透明置顶球 + 面板）、采集端 `/snapshot`、球的电量环与粒子团、
 > **三级整理真生效**（按需 UAC、前后测量、节流、排除名单）、**硬缺页率**与**自动整理**（默认关）、
-> **面板进程表**（排序/搜索/结束进程，可连子孙）。托盘与开机自启在 M4。
+> **系统信息页**（机器/软件环境规格网格）。第 4 页原来的**进程表**已按反馈下线（改成了系统信息）；
+> 采集端的 `/processes` 与 `/kill` 仍在，可用命令行或 HTTP 直接调用。托盘与开机自启在 M4。
 
 ## 它做什么、不做什么
 
@@ -74,16 +75,29 @@ Windows 上没有"释放内存"的魔法。所谓加速球做的是两件事：�
   `POST /auto?on=1&threshold_mb=2048&check_secs=60&min_gap_secs=180`
 - 每次检查的判断原因都记着（面板上显示"上次判断：…"），没有黑箱
 
-### 进程表与结束进程（M3）
+### 系统信息页（第 4 页）
 
-- 进程表来自**一次** `NtQuerySystemInformation(SystemProcessInformation)`（403 个进程约 17~32ms）：
+格式照 `nonebot-plugin-status-zmd` 的「设备信息」规格网格：两列，标签在左（灰、12px）、值在右（深、13px），
+行底一条虚线。十四项，按"行优先"排进两列：`主机名 | 操作系统`、`内核 | 运行时长`、`处理器 | 核心`、`内存 | 显卡`、
+`磁盘 | 网络`、`采集端 | 采样`、`数据目录 | 日志文件`。静态信息只采一次（采集端启动时 `collect_static`）。
+
+- 操作系统名走注册表 `ProductName`/`DisplayVersion`：Win11 的 `ProductName` 仍写着 "Windows 10"，
+  按 build ≥ 22000 校正（本机 → `Windows 11 Home China · 25H2`）；拿不到就退回 `platform`
+- 运行时长是**系统** uptime（`psutil.boot_time()`），不是面板自己的运行时间
+- 网络一行给本机 IPv4（跳过环回/虚拟网卡/169.254）与链路速率
+- 采集端一行给"可执行文件 · Python 版本 · pid"，用来判断壳拉起的是脚本还是打包的 `backend.exe`
+
+采集端仍保留 `/processes` 与 `/kill`（M3 的快速枚举与结束进程就在这里）：面板不再调用它们，
+但命令行（`--kill-now --tree`）与 HTTP 直接调用照样可用。
+
+### 进程枚举与结束进程（采集端能力，面板已不在 UI 里用）
+
+- 枚举来自**一次** `NtQuerySystemInformation(SystemProcessInformation)`（403 个进程约 17~32ms）：
   名字、内存、线程数、CPU 时间都在同一条记录里，不需要按进程逐个 `OpenProcess`
-- **CPU% 是两次采样的差**再按逻辑核数归一 —— 所以**第一次打开全是 0**（Task Manager 也是这样），
-  并且面板只在**可见时**每 2 秒采一次（收起就不采）。16 逻辑核上跑单线程满载，实测显示 6.3%（psutil 同刻 6.2%）
+- **CPU% 是两次采样的差**再按逻辑核数归一 —— 16 逻辑核上跑单线程满载，实测显示 6.3%（psutil 同刻 6.2%）
 - 结束进程：单个或连子孙（`tree=1`，子孙先死）。**拦住**内核/关键进程（System/smss/csrss/wininit/services/
   lsass/winlogon/Registry/Memory Compression/fontdrvhost）与本工具自己的进程（父进程链，含壳）；
   权限不足（其他用户或受保护进程）时**按需提权**再试一次，和整理共用同一套 helper 机制
-- 面板里受保护的进程会被压暗；点"结束进程"弹确认框（结束是不可逆的），结果写在状态行
 
 ## 为什么壳是 WPF（而不是 Web 壳）
 
@@ -119,8 +133,8 @@ GET  /health          健康检查（壳启动前探活用）
 POST /clean?tier=l1   l2 / l3 整理一次；返回 summary/detail/before/after/delta/timing
 GET  /clean/result    最近一次整理的结果（面板打开时回填）
 POST /auto?on=1       开关自动整理（GET /auto 看状态与"上次判断"的原因）
-GET  /processes       进程表（pid/名字/内存/CPU%/线程/是否受保护）
-POST /kill?pid=N      结束进程（tree=1 连子孙）；权限不足时按需提权
+GET  /processes       进程表（pid/名字/内存/CPU%/线程/是否受保护）—— 面板已不再调用，命令行/HTTP 可用
+POST /kill?pid=N      结束进程（tree=1 连子孙）；权限不足时按需提权 —— 同上
 GET  /dev.html        设计参考页（调色用）
 ```
 
@@ -172,7 +186,7 @@ CI（`.github/workflows/build.yml`）把上面这套跑一遍，产出 `zmd-orb-
 orb/                             WPF 壳（.NET 6）
   BallWindow.xaml(.cs)           球窗口：取数、单击跑轻度整理、拖拽/双击/右键、悬停
   BallVisual.cs                  电量环 + 中心粒子团（直绘，参数对应 ring.js）
-  PanelWindow.xaml(.cs)          面板：三档整理 + 六张读数卡（M3 加进程表）
+  PanelWindow.xaml(.cs)          面板：三档整理 + 六张读数卡 + 系统信息规格网格
   Ring.cs                        环的几何与配色常量
   MemoryApi.cs / BackendProcess.cs / Win32.cs / Diag.cs
 collector/speed_collector.py    本地采集/清理服务（psutil + ctypes）

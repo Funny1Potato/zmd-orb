@@ -220,32 +220,6 @@
       </Setter>
     </Style>
 
-    <!-- 进程行：同上，另加选中态（亮黄描边） -->
-    <Style x:Key="ProcItem" TargetType="ListBoxItem" BasedOn="{StaticResource RowItem}">
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bg" Background="{StaticResource Panel2}" BorderBrush="#e2e2de"
-                    BorderThickness="1" Padding="9,7">
-              <Border.Effect>
-                <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Opacity="0.12" Color="#000000"/>
-              </Border.Effect>
-              <ContentPresenter/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Margin" Value="3,0,0,0"/>
-              </Trigger>
-              <Trigger Property="IsSelected" Value="True">
-                <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource Yellow}"/>
-                <Setter TargetName="bg" Property="Background" Value="#fffdf0"/>
-              </Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <!-- 小输入框（显示设置用） -->
     <Style x:Key="MiniBox" TargetType="TextBox">
       <Setter Property="Height" Value="24"/>
@@ -337,7 +311,7 @@
               <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
             </Button>
             <Button x:Name="tabOrb" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
-                    ToolTip="整理与进程">
+                    ToolTip="整理与系统信息">
               <local:IconView Key="grid" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic4"/>
             </Button>
           </StackPanel>
@@ -852,137 +826,51 @@
             </UniformGrid>
           </StackPanel>
 
-          <!-- 进程表（M3） -->
+          <!-- 系统信息：格式照 nonebot-plugin-status-zmd 的 specs 网格
+               （两列，标签左灰 / 值右深，行底一条虚线；行由代码按采集端 sys 块生成） -->
           <Grid Grid.Row="1" Margin="0,16,0,0">
             <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
             <Grid Grid.Row="0">
               <Border Style="{StaticResource SecTitleBox}" Margin="0" VerticalAlignment="Top">
-                <TextBlock Text="进程" Style="{StaticResource SecTitle}"/>
+                <TextBlock Text="系统信息" Style="{StaticResource SecTitle}"/>
               </Border>
-              <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
-                <TextBox x:Name="procSearch" Width="150" Height="28" FontSize="12"
-                         VerticalContentAlignment="Center" Padding="8,0" TextChanged="Search_TextChanged"
-                         ToolTip="按进程名或 PID 过滤"/>
-                <Button x:Name="BtnRefreshProc" Content="刷新" Style="{StaticResource GhostBtn}" Height="28"
-                        Padding="12,0" Margin="8,0,0,0" Click="RefreshProc_Click"/>
-                <CheckBox x:Name="TreeChk" Content="连子孙" FontSize="12" Foreground="{StaticResource Ink}"
-                          VerticalAlignment="Center" Margin="10,0,0,0" Cursor="Hand"/>
-                <Button x:Name="BtnKill" Content="结束进程" Style="{StaticResource ActBtn}" Height="28"
-                        Padding="12,0" Margin="8,0,0,0" Click="Kill_Click"/>
-              </StackPanel>
+              <TextBlock x:Name="sysMeta" HorizontalAlignment="Right" VerticalAlignment="Center"
+                         FontSize="12.5" Foreground="{StaticResource InkDim}"/>
             </Grid>
-            <Grid Grid.Row="1" Margin="1,0,9,0" Height="30">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="120"/>
-                <ColumnDefinition Width="150"/>
-              </Grid.ColumnDefinitions>
-              <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Style="{StaticResource ColHeadMark}">
-                  <TextBlock Text="名" FontSize="9" Foreground="{StaticResource Yellow}"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <TextBlock x:Name="headName" Text="进程名称" Style="{StaticResource ColHead}" Margin="7,0,0,0"
-                           Cursor="Hand" MouseLeftButtonUp="Sort_Name"/>
-              </StackPanel>
-              <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
-                          VerticalAlignment="Center">
-                <Border Style="{StaticResource ColHeadMark}">
-                  <TextBlock Text="C" FontSize="9" Foreground="{StaticResource Yellow}"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <TextBlock x:Name="headCpu" Text="CPU 占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
-                           Cursor="Hand" MouseLeftButtonUp="Sort_Cpu"/>
-              </StackPanel>
-              <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
-                          VerticalAlignment="Center">
-                <Border Style="{StaticResource ColHeadMark}">
-                  <TextBlock Text="M" FontSize="9" Foreground="{StaticResource Yellow}"
-                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <TextBlock x:Name="headMem" Text="内存占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
-                           Cursor="Hand" MouseLeftButtonUp="Sort_Mem"/>
-              </StackPanel>
-              <Rectangle Grid.ColumnSpan="3" Height="1" Stroke="#b5b5b0" StrokeThickness="1"
-                         StrokeDashArray="3,2" VerticalAlignment="Bottom"/>
-            </Grid>
-            <ListBox x:Name="procList" Grid.Row="2" Margin="0,8,0,0" BorderThickness="0"
-                     Background="Transparent" HorizontalContentAlignment="Stretch"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     ItemContainerStyle="{StaticResource ProcItem}">
-              <ListBox.Resources>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0">
+              <ScrollViewer.Resources>
                 <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}"/>
-              </ListBox.Resources>
-              <ListBox.ItemTemplate>
-                <DataTemplate>
-                  <Grid>
-                    <Grid.ColumnDefinitions>
-                      <ColumnDefinition Width="*"/>
-                      <ColumnDefinition Width="120"/>
-                      <ColumnDefinition Width="150"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid Grid.Column="0">
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                      </Grid.ColumnDefinitions>
-                      <Grid Grid.Column="0" Width="38" Height="38">
-                        <Border Background="{StaticResource Dark2}"/>
-                        <Path Fill="#ffffff" Data="M0,0 L7,0 L7,7 Z" Width="7" Height="7"
-                              HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
-                        <TextBlock Text="{Binding Initial}" Foreground="#ffffff" FontSize="19"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                      </Grid>
-                      <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Name}" FontSize="13.5" Foreground="#454540"
-                                   TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{Binding Sub}" FontSize="11"
-                                   Foreground="{StaticResource InkDim}" Margin="0,1,0,0"
-                                   TextTrimming="CharacterEllipsis"/>
-                      </StackPanel>
+              </ScrollViewer.Resources>
+              <ItemsControl x:Name="specList" HorizontalContentAlignment="Stretch">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <UniformGrid Columns="2"/>
+                  </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Grid Margin="0,0,26,0" Height="36">
+                      <Rectangle Height="1" Stroke="#d5d5d0" StrokeThickness="1" StrokeDashArray="3,2"
+                                 VerticalAlignment="Bottom"/>
+                      <TextBlock Text="{Binding Lbl}" FontSize="12" Foreground="{StaticResource InkDim}"
+                                 VerticalAlignment="Center" Margin="6,0,0,0"/>
+                      <TextBlock Text="{Binding Val}" FontSize="13" Foreground="#3f3f3c"
+                                 VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,6,0"
+                                 TextTrimming="CharacterEllipsis" MaxWidth="300" ToolTip="{Binding Val}"/>
                     </Grid>
-                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
-                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <TextBlock Text="{Binding CpuText}" FontSize="15" Foreground="#3f3f3c"
-                                   Typography.NumeralAlignment="Tabular"/>
-                        <TextBlock Text="%" FontSize="12" Foreground="{StaticResource Blue}"
-                                   VerticalAlignment="Bottom"/>
-                      </StackPanel>
-                      <Grid HorizontalAlignment="Right" Width="86" Height="3" Margin="0,4,0,0">
-                        <Rectangle Fill="#e6e6e2"/>
-                        <Rectangle Fill="{StaticResource YellowBar}" HorizontalAlignment="Left"
-                                   Width="{Binding CpuBar}"/>
-                      </Grid>
-                    </StackPanel>
-                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,0,0,0">
-                      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <TextBlock Text="{Binding MemVal}" FontSize="15" Foreground="#3f3f3c"
-                                   Typography.NumeralAlignment="Tabular"/>
-                        <TextBlock Text="{Binding MemUnit}" FontSize="11"
-                                   Foreground="{StaticResource InkDim}" VerticalAlignment="Bottom"
-                                   Margin="3,0,0,1"/>
-                      </StackPanel>
-                      <Grid HorizontalAlignment="Right" Width="86" Height="3" Margin="0,4,0,0">
-                        <Rectangle Fill="#e6e6e2"/>
-                        <Rectangle Fill="{StaticResource YellowBar}" HorizontalAlignment="Left"
-                                   Width="{Binding MemBar}"/>
-                      </Grid>
-                    </StackPanel>
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
           </Grid>
 
           <Border Grid.Row="2" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
                   BorderThickness="1" Padding="14,10" Margin="0,14,0,0">
             <StackPanel>
-              <TextBlock x:Name="procCount" FontSize="12" Foreground="{StaticResource Ink}"/>
-              <TextBlock x:Name="lastResult" Margin="0,6,0,0" FontSize="11.5"
+              <TextBlock x:Name="lastResult" FontSize="11.5"
                          Foreground="{StaticResource InkDim}" TextWrapping="Wrap" LineHeight="17"
                          Text="还没整理过。"/>
             </StackPanel>
