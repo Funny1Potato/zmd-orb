@@ -71,6 +71,68 @@ static class Win32
         return h == IntPtr.Zero ? "无窗口" : $"0x{h.ToInt64():X}";
     }
 
+    /* ---- 显示器工作区（拖拽时把球限制在屏内） ---- */
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO
+    {
+        public int cbSize;
+        public RECT rcMonitor, rcWork;
+        public uint dwFlags;
+    }
+
+    [DllImport("user32.dll")]
+    static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO mi);
+
+    /// <summary>窗口所在显示器的工作区（物理像素，已排除任务栏）；拿不到就给虚拟屏幕范围。
+    /// 这里一律用物理像素算，避开多显示器不同缩放时 DIP 换算的坑。</summary>
+    public static bool WorkArea(IntPtr hWnd, out RECT work)
+    {
+        work = default;
+        var mon = MonitorFromWindow(hWnd, 2 /*MONITOR_DEFAULTTONEAREST*/);
+        if (mon != IntPtr.Zero)
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfoW(mon, ref mi))
+            {
+                work = mi.rcWork;
+                return true;
+            }
+        }
+        int vx = GetSystemMetrics(76 /*SM_XVIRTUALSCREEN*/), vy = GetSystemMetrics(77);
+        work = new RECT
+        {
+            Left = vx, Top = vy,
+            Right = vx + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            Bottom = vy + GetSystemMetrics(SM_CYVIRTUALSCREEN),
+        };
+        return false;
+    }
+
+    delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data);
+
+    [DllImport("user32.dll")]
+    static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
+
+    /// <summary>所有显示器的工作区（物理像素，各自排除自己的任务栏）。
+    /// 拖拽时要在**每台**显示器的合法范围里挑一个最接近目标的位置，球才能跨屏移动。</summary>
+    public static System.Collections.Generic.List<RECT> WorkAreas()
+    {
+        var list = new System.Collections.Generic.List<RECT>(4);
+        MonitorEnumProc cb = (IntPtr mon, IntPtr hdc, ref RECT r, IntPtr data) =>
+        {
+            var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfoW(mon, ref mi)) list.Add(mi.rcWork);
+            return true;
+        };
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, cb, IntPtr.Zero);
+        GC.KeepAlive(cb);
+        return list;
+    }
+
     /// <summary>
     /// 让球不进任务栏/Alt-Tab。WPF 的 ShowInTaskbar=false 实测只做到"不加 WS_EX_APPWINDOW"
     /// （2026-09-26 装机实测 exstyle=0x00080008，没有 WS_EX_TOOLWINDOW），

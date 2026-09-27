@@ -17,7 +17,7 @@ static class Ring
     public const int Particles = 120;
     public const int Fps = 30;           // 球常驻，限 30fps
     public const double OutlineW = 1.8;  // 描边厚度（单侧）
-    public const double DiscAlpha = 0.45; // 内盘半透明度（0=全透，1=不透）
+    public const double DiscAlpha = 0.45; // 内盘的半透量级（磨砂盘的两个 alpha 停靠点就是照它定的）
 
     public static readonly Color Rail = Hex("#d3d3ce");
     public static readonly Color Outline = Hex("#9a9a94");   // 描边：比衬环深一档，浮在任意桌面上都看得清
@@ -28,6 +28,8 @@ static class Ring
     public static readonly Color DecoLeft = Hex("#ecb063");
     public static readonly Color DecoRight = Hex("#7fb2cc");
     public static readonly Color Disc = Hex("#ededea");
+    public static readonly Color FrostTrack = Hex("#f7f7f4");   // 计量条底槽：浅色半透（磨砂感）
+    public static readonly Color FrostDot = Hex("#ffffff");      // 内盘磨砂纹理的点色
     public static readonly Color BlobRgb = Hex("#60605c");
 
     public static Color Hex(string s) => (Color)ColorConverter.ConvertFromString(s);

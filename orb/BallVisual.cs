@@ -5,7 +5,8 @@ using System.Windows.Media;
 namespace ZmdOrb;
 
 /// <summary>
-/// 电量环 + 中心粒子团。几何、配色、动画参数全部对应 frontend/ring.js（同一套 zmd 口径）。
+/// 电量环 + 中心粒子团。主环与粒子团的几何、配色、动画参数对应 frontend/ring.js（同一套 zmd 口径）；
+/// 两侧的 1/4 装饰弧改成了计量条：左上橙 = 内存占用率、右下蓝 = 提交额度占用率，水平线为零点。
 /// 不参与命中测试：球的可点区域由外层 Grid 统一处理。
 /// </summary>
 sealed class BallVisual : FrameworkElement
@@ -18,14 +19,15 @@ sealed class BallVisual : FrameworkElement
     readonly double[] _phase = new double[Ring.Particles];
     readonly Brush[] _blobBrush = new Brush[Buckets + 1];
 
-    readonly Geometry _decoLeftUnderG, _decoLeftG, _decoRightUnderG, _decoRightG, _glowClip;
-    readonly Pen _decoUnder, _decoLeftPen, _decoRightPen, _railPen, _trackPen;
+    readonly Geometry _decoLeftUnderG, _decoLeftTrackG, _decoRightUnderG, _decoRightTrackG, _glowClip;
+    readonly Pen _decoUnder, _decoLeftPen, _decoLeftTrack, _decoRightPen, _decoRightTrack, _railPen, _trackPen;
     readonly Pen[] _arcPen = new Pen[3], _glowNear = new Pen[3], _glowMid = new Pen[3], _glowFar = new Pen[3];
-    readonly Brush _discBrush;
+    readonly Brush _discBrush, _frostDots;
+    readonly Geometry _discG;
 
-    Geometry? _arc;
-    double _arcPct = double.NaN;
-    double _pct;
+    Geometry? _arc, _decoLeftFillG, _decoRightFillG;
+    double _arcPct = double.NaN, _decoPct = double.NaN, _decoCommit = double.NaN;
+    double _pct, _commitPct;
     double _t, _squish = 1, _amp = 1;
 
     public BallVisual()
@@ -48,23 +50,57 @@ sealed class BallVisual : FrameworkElement
             _blobBrush[b] = br;
         }
 
-        /* 描边沿用 ring.js 的做法：在底色下面再画一道更粗的同形描边。
+        /* 两侧的 1/4 弧改成计量条（用户要求）：
+           左上橙 = 内存占用率（used/total）、右下蓝 = 提交额度占用率（committed/limit），
+           都以**水平线为零点**向各自那一侧涨：橙从 9 点(270°)往 12 点涨、蓝从 3 点(90°)往 6 点涨，
+           满量程仍是这 1/4 弧（270~360 / 90~180），底槽保持整条弧的浅色打底。
+           描边沿用 ring.js 的做法：在底色下面再画一道更粗的同形描边。
            装饰弧两端是平头，所以描边得朝两端各外延 capExt（＝描边厚度折算成的角度），
            端面才会被平直地描上而不是靠圆头包住。 */
         double ow = Ring.OutlineW;
         double capExt = ow * 180 / (Math.PI * Ring.RDeco);
         _decoLeftUnderG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270 - capExt, 360 + capExt);
-        _decoLeftG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, 360);
+        _decoLeftTrackG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, 360);
         _decoRightUnderG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90 - capExt, 180 + capExt);
-        _decoRightG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 180);
+        _decoRightTrackG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 180);
 
         _decoUnder = Pen(Ring.Outline, Ring.WDeco + 2 * ow);
         _decoLeftPen = Pen(Ring.DecoLeft, Ring.WDeco, 0.95);
         _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
+        // 没占到的那一段：浅色半透（磨砂玻璃那种"一层雾"的底），不再用弧色淡化
+        _decoLeftTrack = Pen(Ring.FrostTrack, Ring.WDeco, 0.62);
+        _decoRightTrack = Pen(Ring.FrostTrack, Ring.WDeco, 0.62);
         _railPen = Pen(Ring.Outline, Ring.WTrack + 2 * ow);   // 衬底 = 轨道宽 + 两侧描边，形成均匀一圈描边
         _trackPen = Pen(Ring.Track, Ring.WTrack);
-        // 中间的盘做成半透明（用户要求）：让壁纸透上来，球看起来更轻
-        _discBrush = Freeze(new SolidColorBrush(Ring.Disc) { Opacity = Ring.DiscAlpha });
+        /* 中间的盘：浅色半透 + 一层细点纹理，做出"磨砂玻璃"的观感。
+           真正的背景模糊（DWM 亚克力）是按整窗矩形铺的，会把当初去掉的"泛底"请回来，
+           所以这里用"高光渐变 + 微点纹理"来近似磨砂，任意壁纸上都不会变成一块方雾。 */
+        var frost = new RadialGradientBrush
+        {
+            GradientOrigin = new Point(0.42, 0.34),
+            Center = new Point(0.5, 0.46),
+            RadiusX = 0.68,
+            RadiusY = 0.68,
+        };
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(0x7a, 0xff, 0xff, 0xff), 0));
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(0x50, 0xf1, 0xf1, 0xed), 1));
+        frost.Freeze();
+        _discBrush = frost;
+
+        var dotBrush = new SolidColorBrush(Ring.FrostDot) { Opacity = 0.10 };
+        dotBrush.Freeze();
+        var dots = new DrawingBrush
+        {
+            TileMode = TileMode.Tile,
+            Viewport = new Rect(0, 0, 4, 4),
+            ViewportUnits = BrushMappingMode.Absolute,
+            Stretch = Stretch.None,
+            Drawing = new GeometryDrawing(dotBrush, null, new EllipseGeometry(new Point(2, 2), 0.85, 0.85)),
+        };
+        dots.Freeze();
+        _frostDots = dots;
+        _discG = new EllipseGeometry(new Point(Ring.Cx, Ring.Cy), Ring.RDisc, Ring.RDisc);
+        _discG.Freeze();
 
         var colors = new[] { Ring.ArcLow, Ring.ArcMid, Ring.ArcHigh };
         for (int i = 0; i < 3; i++)
@@ -101,6 +137,19 @@ sealed class BallVisual : FrameworkElement
         }
     }
 
+    /// <summary>右侧蓝条（提交额度占用率 0~100）。</summary>
+    public double CommitPct
+    {
+        get => _commitPct;
+        set
+        {
+            double v = value;
+            if (Math.Abs(v - _commitPct) < 0.0001) return;
+            _commitPct = v;
+            InvalidateVisual();
+        }
+    }
+
     /// <summary>累计绘制帧数（开销观测用）。</summary>
     public long Frames { get; private set; }
 
@@ -123,16 +172,20 @@ sealed class BallVisual : FrameworkElement
         Frames++;
 
         dc.DrawGeometry(null, _decoUnder, _decoLeftUnderG);
-        dc.DrawGeometry(null, _decoLeftPen, _decoLeftG);
+        dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
+        if (_decoLeftFillG != null) dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
         dc.DrawGeometry(null, _decoUnder, _decoRightUnderG);
-        dc.DrawGeometry(null, _decoRightPen, _decoRightG);
+        dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
+        if (_decoRightFillG != null) dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
 
         var c = new Point(Ring.Cx, Ring.Cy);
         dc.DrawEllipse(null, _railPen, c, Ring.R, Ring.R);
         dc.DrawEllipse(null, _trackPen, c, Ring.R, Ring.R);
         dc.DrawEllipse(_discBrush, null, c, Ring.RDisc, Ring.RDisc);
+        dc.DrawGeometry(_frostDots, null, _discG);      // 磨砂盘上的细点纹理（裁在盘内）
 
         EnsureArc();
+        EnsureDeco();
         if (_arc != null)
         {
             int ci = _arcPct < 70 ? 0 : _arcPct < 88 ? 1 : 2;
@@ -154,6 +207,21 @@ sealed class BallVisual : FrameworkElement
         if (!double.IsNaN(_arcPct) && Math.Abs(p - _arcPct) < 0.05) return;
         _arcPct = p;
         _arc = Ring.Arc(Ring.Cx, Ring.Cy, Ring.R, 0, Math.Max(0.5, Math.Min(359.5, p * 3.6)));
+    }
+
+    /// <summary>两条装饰弧的填充段：从水平线（橙=9 点、蓝=3 点）起，按百分比涨到各自的 1/4 弧满量程。
+    /// 进度几乎没变就不重建几何；占比为 0 时整段不画（只留浅色底槽）。</summary>
+    void EnsureDeco()
+    {
+        double a = Math.Max(0, Math.Min(100, _pct));
+        double b = Math.Max(0, Math.Min(100, _commitPct));
+        if (Math.Abs(a - _decoPct) < 0.05 && Math.Abs(b - _decoCommit) < 0.05) return;
+        _decoPct = a;
+        _decoCommit = b;
+        _decoLeftFillG = a <= 0.05 ? null
+            : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, 270 + Math.Max(0.5, a * 0.9));
+        _decoRightFillG = b <= 0.05 ? null
+            : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 90 + Math.Max(0.5, b * 0.9));
     }
 
     void DrawBlob(DrawingContext dc)

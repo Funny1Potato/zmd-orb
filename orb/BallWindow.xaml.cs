@@ -10,7 +10,7 @@ using System.Windows.Threading;
 namespace ZmdOrb;
 
 /// <summary>
-/// 悬浮球窗口。M0 状态与 Web 版一致：单击 = 整理动画（**演示**，真清理在 M1）、拖拽 = 移动窗口、
+/// 悬浮球窗口。单击 = 轻度整理（免提权）、拖拽 = 移动窗口（整球限制在当前显示器工作区内）、
 /// 右键/双击 = 打开面板、取不到采集端就回落演示数据。
 /// </summary>
 public partial class BallWindow : Window
@@ -24,11 +24,10 @@ public partial class BallWindow : Window
 
     static readonly Brush Ink = Frozen("#4a4a46");   // 有实时数据
     static readonly Brush Dim = Frozen("#a2a29b");   // 回落演示数据：数字调暗，免得把编的数值当真
-    static readonly Brush Warn = Frozen("#c2703a");  // 提交额度 ≥85%：真会把程序打崩的东西，给数字换色
 
     // 取数状态
     bool _live;
-    double _memPct, _commitPct;
+    double _memPct, _commitPct;      // 内存占用率（球面数字 + 左侧橙条）/ 提交额度占用率（右侧蓝条）
     double _demoPct = 62;
     bool _polling;
 
@@ -39,15 +38,15 @@ public partial class BallWindow : Window
 
     // 交互
     bool _hover, _pressed, _dragged, _busy, _quitting;
-    Point _pressScreen;
-    Point _dragFrom;
+    Point _pressScreen;              // 按下时的鼠标屏幕坐标（物理像素）
+    int _dragX, _dragY;              // 按下时窗口左上角（物理像素）
     long _lastCleanTick;
 
     CleanAnim? _anim;
 
     sealed class CleanAnim
     {
-        public bool Settling;          // false = 向上扫（等采集端结果）；true = 落回真实新值
+        public bool Settling;          // false = 向 0 扫（等采集端结果）；true = 从 0 回涨到真实新值
         public double From, Target;
         public TimeSpan T0;
     }
@@ -70,7 +69,16 @@ public partial class BallWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        Win32.HideFromTaskbar(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        var h = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        Win32.HideFromTaskbar(h);
+        // 起始位置（XAML 里的 1200,220）在小屏幕或改过缩放后可能落到屏外，开局先夹一次
+        if (Win32.GetWindowRect(h, out var r))
+        {
+            int beforeX = r.Left, beforeY = r.Top;
+            MoveClamped(r.Left, r.Top);
+            if (Win32.GetWindowRect(h, out var r2) && (r2.Left != beforeX || r2.Top != beforeY))
+                Diag.Log($"球起始位置被夹回屏内：({beforeX},{beforeY}) → ({r2.Left},{r2.Top})");
+        }
     }
 
     protected override void OnClosing(CancelEventArgs e)
@@ -107,13 +115,15 @@ public partial class BallWindow : Window
         finally { _polling = false; }
     }
 
-    /// <summary>球面只显示占用率一个数；提交额度逼近上限时这个数换色，不再用一行小字去说明。</summary>
+    /// <summary>球面只显示占用率一个数；提交额度由右侧蓝条表示，不再拿它给数字换色
+    /// （球面那个数是内存占用率，跟提交额度不是一个口径）。</summary>
     void Render()
     {
         double p = Math.Max(0, Math.Min(100, _memPct));
         Visual.Pct = p;
+        Visual.CommitPct = Math.Max(0, Math.Min(100, _commitPct));
         PctNum.Text = Math.Round(p).ToString();
-        PctText.Foreground = !_live ? Dim : _commitPct >= 85 ? Warn : Ink;
+        PctText.Foreground = _live ? Ink : Dim;
     }
 
     /* ---------------- 帧循环（30fps 封顶） ---------------- */
@@ -206,11 +216,11 @@ public partial class BallWindow : Window
         var a = _anim!;
         if (!a.Settling)
         {
-            // 向上扫到 100 后停住等结果（深度档可能要等用户点 UAC，会停得久一些）
+            // 先清零：环从当前值扫到 0 后停住等结果（深度档可能要等用户点 UAC，会停得久一些）
             double k = Math.Min(1.0, (_now - a.T0).TotalMilliseconds / SweepMs);
-            Visual.Pct = a.From + (100 - a.From) * k;
+            Visual.Pct = a.From * (1 - k);
             PctNum.Text = Math.Round(Visual.Pct).ToString();
-            Visual.SetBreathe(0.78, 0.5);         // 被"吸住"的观感
+            Visual.SetBreathe(1 - 0.22 * k, 1 - 0.5 * k);   // 被"吸住"的观感
             return;
         }
 
@@ -226,7 +236,7 @@ public partial class BallWindow : Window
             return;
         }
         double e = 1 - Math.Pow(1 - k2, 3);
-        Visual.Pct = 100 + (a.Target - 100) * e;
+        Visual.Pct = a.Target * e;                 // 从 0 回涨到整理后的真实占用
         PctNum.Text = Math.Round(Visual.Pct).ToString();
         Visual.SetBreathe(1, 1);
     }
@@ -268,7 +278,11 @@ public partial class BallWindow : Window
         _dragged = false;
         // 用屏幕坐标算位移：PointToScreen 与位置无关，窗口自己移动也不会产生反馈
         _pressScreen = Stage.PointToScreen(e.GetPosition(Stage));
-        _dragFrom = new Point(Left, Top);
+        if (Win32.GetWindowRect(new System.Windows.Interop.WindowInteropHelper(this).Handle, out var r))
+        {
+            _dragX = r.Left;                    // 记物理像素：拖动全程都在物理像素里算
+            _dragY = r.Top;
+        }
         Stage.CaptureMouse();
         Diag.Log($"球收到点击 @屏幕({_pressScreen.X:F0},{_pressScreen.Y:F0})");
     }
@@ -288,10 +302,39 @@ public partial class BallWindow : Window
             Cursor = Cursors.SizeAll;
         }
 
-        // Left/Top 是 DIP，鼠标位移是物理像素，按当前 DPI 折算
-        double dpi = VisualTreeHelper.GetDpi(this).DpiScaleX;
-        Left = _dragFrom.X + dx / dpi;
-        Top = _dragFrom.Y + dy / dpi;
+        /* 拖动全程用**物理像素** + SetWindowPos：Left/Top 是 DIP，混着算在 125% 缩放下会有取整漂移，
+           多显示器不同缩放时更是对不上。同时把整球限制在某一台显示器的工作区内（可跨屏）。 */
+        MoveClamped(_dragX + (int)Math.Round(dx), _dragY + (int)Math.Round(dy));
+    }
+
+    /// <summary>把球移到指定位（物理像素），整球限制在某台显示器的工作区内。
+    /// 多显示器时在**每台**显示器的合法范围里挑一个离目标最近的——这样既能跨屏拖，
+    /// 又不会掉到桌面外（按"当前窗口所在显示器"夹会永远跨不过去，早先就是这么卡的）。</summary>
+    void MoveClamped(int x, int y)
+    {
+        var h = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (h == IntPtr.Zero) return;
+        if (Win32.GetWindowRect(h, out var r))
+        {
+            int w = r.Right - r.Left, ht = r.Bottom - r.Top;
+            var areas = Win32.WorkAreas();
+            if (areas.Count > 0)
+            {
+                int bx = x, by = y;
+                long best = long.MaxValue;
+                foreach (var a in areas)
+                {
+                    int cx = Math.Min(Math.Max(x, a.Left), Math.Max(a.Left, a.Right - w));
+                    int cy = Math.Min(Math.Max(y, a.Top), Math.Max(a.Top, a.Bottom - ht));
+                    long d = (long)(cx - x) * (cx - x) + (long)(cy - y) * (cy - y);
+                    if (d < best) { best = d; bx = cx; by = cy; }
+                }
+                x = bx;
+                y = by;
+            }
+        }
+        Win32.SetWindowPos(h, IntPtr.Zero, x, y, 0, 0,
+                           Win32.SWP_NOSIZE | Win32.SWP_NOZORDER | Win32.SWP_NOACTIVATE);
     }
 
     void Stage_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
