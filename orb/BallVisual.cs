@@ -19,7 +19,8 @@ sealed class BallVisual : FrameworkElement
     const double TrackAlpha = 0.55;      // 两侧计量条的底槽（0.35 偏透，按反馈回调一档）
     const double RingTrackAlpha = 0.72;  // 主环未占用段（用户要求再实一点）
     const double BaseAlpha = 0.55;       // 底衬：浅色半透的"磨砂底托"
-    const double OutlineAlpha = 0.85;    // 描边：深一档、几乎实色（底衬改白后描边不能再跟着白，否则轮廓糊掉）
+    const double OutlineAlpha = 0.80;    // 描边：深一档、几乎实色（底衬改白后描边不能再跟着白，否则轮廓糊掉）
+    const double ShadowShiftY = 1.2;     // 阴影往下偏一点，才像投影（不是均匀的描边）
 
     readonly P[] _pts = new P[Ring.Particles];
     readonly double[] _phase = new double[Ring.Particles];
@@ -27,6 +28,8 @@ sealed class BallVisual : FrameworkElement
 
     readonly Geometry _decoLeftBaseG, _decoLeftTrackG, _decoRightBaseG, _decoRightTrackG, _ringBaseG, _glowClip;
     readonly Pen _outlinePen, _decoLeftPen, _decoLeftTrack, _decoRightPen, _decoRightTrack, _trackPen;
+    readonly Pen _shadowNear, _shadowFar;
+    readonly Transform _shadowShift;
     readonly Pen[] _arcPen = new Pen[3], _glowNear = new Pen[3], _glowMid = new Pen[3], _glowFar = new Pen[3];
     readonly Pen[] _decoGlowNear = new Pen[2], _decoGlowMid = new Pen[2], _decoGlowFar = new Pen[2];
     readonly Brush _baseBrush, _discBrush, _frostDots;
@@ -64,7 +67,6 @@ sealed class BallVisual : FrameworkElement
            底衬与描边**分开**画：底衬是浅色半透（磨砂底托），描边是深一档的独立细线。
            两者都用**闭合扇段**（Ring.Sector）实现——这样描边能顺着形状把两端平头也描上，
            而"粗描边垫在底下再压一条细的"只能露出两条长边，且底衬会被描边色带灰（实测就是灰蒙蒙的来源）。 */
-        double ow = Ring.OutlineW;
         _decoLeftTrackG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, 360);
         _decoRightTrackG = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 180);
         _decoLeftBaseG = Ring.Sector(Ring.Cx, Ring.Cy, Ring.RDeco - Ring.WDeco / 2,
@@ -73,7 +75,15 @@ sealed class BallVisual : FrameworkElement
                                       Ring.RDeco + Ring.WDeco / 2, 90, 180);
 
         _baseBrush = Freeze(new SolidColorBrush(Ring.Base) { Opacity = BaseAlpha });
-        _outlinePen = Pen(Ring.Outline, ow, OutlineAlpha);
+        _outlinePen = Pen(Ring.Outline, Ring.OutlineW, OutlineAlpha);
+        /* 沿底衬轮廓再来两圈柔和的暗色（描边色、低透明度、宽度递减），整体向下偏一点点 ——
+           比一圈硬描边更有立体感（用户要求"加点阴影看看"）。画在底衬填充**之前**，
+           这样填充会把朝内的那半边盖掉，只留下朝外的柔影。 */
+        _shadowNear = Pen(Ring.Outline, Ring.OutlineW + 2.0, 0.16);
+        _shadowFar = Pen(Ring.Outline, Ring.OutlineW + 4.5, 0.08);
+        var shift = new TranslateTransform(0, ShadowShiftY);
+        shift.Freeze();
+        _shadowShift = shift;
         _decoLeftPen = Pen(Ring.DecoLeft, Ring.WDeco, 0.95);
         _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
         // 没占到的那一段：各自弧色的浅色版 + 半透明（壁纸透得上来，才是"没占到"的观感）
@@ -193,7 +203,8 @@ sealed class BallVisual : FrameworkElement
     {
         Frames++;
 
-        dc.DrawGeometry(_baseBrush, _outlinePen, _decoLeftBaseG);      // 浅色底衬 + 深色描边（含两端平头）
+        // 每条都先垫一层向下的柔影，再画底衬 + 细描边
+        DrawBase(dc, _decoLeftBaseG);
         dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
         if (_decoLeftFillG != null)
         {
@@ -202,7 +213,7 @@ sealed class BallVisual : FrameworkElement
             dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftFillG);
             dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
         }
-        dc.DrawGeometry(_baseBrush, _outlinePen, _decoRightBaseG);
+        DrawBase(dc, _decoRightBaseG);
         dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
         if (_decoRightFillG != null)
         {
@@ -213,7 +224,7 @@ sealed class BallVisual : FrameworkElement
         }
 
         var c = new Point(Ring.Cx, Ring.Cy);
-        dc.DrawGeometry(_baseBrush, _outlinePen, _ringBaseG);       // 主环：底衬 + 描边
+        DrawBase(dc, _ringBaseG);                                   // 主环：柔影 + 底衬 + 细描边
         dc.DrawEllipse(null, _trackPen, c, Ring.R, Ring.R);
         dc.DrawEllipse(_discBrush, null, c, Ring.RDisc, Ring.RDisc);
         dc.DrawGeometry(_frostDots, null, _discG);      // 磨砂盘上的细点纹理（裁在盘内）
@@ -232,6 +243,17 @@ sealed class BallVisual : FrameworkElement
         }
 
         DrawBlob(dc);
+    }
+
+    /// <summary>底衬的通用画法：[向下的柔影] → [浅色底衬 + 细描边]。
+    /// 柔影画在填充之前，朝内那半边会被填充盖掉，只留朝外的柔影。</summary>
+    void DrawBase(DrawingContext dc, Geometry geo)
+    {
+        dc.PushTransform(_shadowShift);
+        dc.DrawGeometry(null, _shadowFar, geo);
+        dc.DrawGeometry(null, _shadowNear, geo);
+        dc.Pop();
+        dc.DrawGeometry(_baseBrush, _outlinePen, geo);
     }
 
     /// <summary>扫到极值时留 0.5° 以免弧退化；进度几乎没变就不重建几何。</summary>
