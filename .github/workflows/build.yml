@@ -80,20 +80,18 @@ jobs:
           powershell -NoProfile -Command "Compress-Archive -Path '$PUB/*' -DestinationPath 'zmd-orb-win-x64.zip' -Force"
           ls -la zmd-orb-win-x64.zip
 
-      # 安装包（M4）：Inno Setup。版本号取 tag（v1.2.3 → 1.2.3），手动触发时给个 dev 版本
+      # 安装包（M4）：Inno Setup。版本号取 tag（v1.2.3 → 1.2.3），手动触发时给个 dev 版本。
+      # 中文语言包已经随仓库带在 installer/ 下（Inno 官方安装包不带中文，那份是社区翻译）。
       - name: Build installer (Inno Setup)
         run: |
-          choco install innosetup --no-progress -y
-          # 中文语言包（Inno 非官方翻译，官方安装包不带；抓不到就只出英文向导）
-          curl -fsSL -o installer/ChineseSimplified.isl \
-            https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl \
-            || echo "⚠️ 中文语言包没抓到，安装向导只有英文"
+          choco install innosetup --no-progress -y || true
           VER="${GITHUB_REF_NAME#v}"
           case "$GITHUB_REF_NAME" in v*) ;; *) VER="0.0.1-dev" ;; esac
-          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
-          "$ISCC" "/DMyAppVersion=$VER" \
-                  "/DMySourceDir=$(cygpath -w "$PWD/$PUB")" \
-                  "$(cygpath -w "$PWD/installer/zmd-orb.iss")"
+          # /D... 这种参数在 MSYS bash 下会被当成路径改写，必须关掉路径转换
+          MSYS_NO_PATHCONV=1 "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" \
+            "/DMyAppVersion=$VER" \
+            "/DMySourceDir=$(cygpath -w "$PWD/$PUB")" \
+            "$(cygpath -w "$PWD/installer/zmd-orb.iss")"
           ls -la dist/
 
       - name: Upload build artifact

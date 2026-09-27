@@ -35,8 +35,9 @@ zmd-orb.exe --autostart on|off 只改开机自启（HKCU 的 Run 键）然后退
 
 `installer/zmd-orb.iss`（Inno Setup 6）：装到 `{autopf}\zmd-orb`、写开始菜单与卸载项、
 可勾选"开机自启"（同一个 Run 键）与桌面图标，卸载前 `taskkill` 一次避免文件占用。
-中文向导用的是 Inno 的**非官方翻译**（官方安装包不带），CI 会从 issrc 仓库抓一份放到 `installer/`；
-抓不到就只出英文向导（`.iss` 里用 `#if FileExists` 兜着，不会编译失败）。
+中文向导用的是社区翻译的 `installer/ChineseSimplified.isl`（Inno 官方安装包不带中文，
+这份来自 `kira-96/Inno-Setup-Chinese-Simplified-Translation`，随仓库一起带上，CI 不需要联网抓）；
+`.iss` 里用 `#if FileExists` 兜着，万一文件不在也只是退化成英文向导，不会编译失败。
 
 ## 它做什么、不做什么
 
