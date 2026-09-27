@@ -622,8 +622,8 @@ public partial class PanelWindow : Window
         gauge.Comp = comp;
         bigNum.Text = Math.Round(comp / 100 * denom).ToString();
         ofMax.Text = "/ " + Math.Round(denom);
-        usedVal.Text = Math.Round(_usedMb).ToString();            // 物理内存口径（驻留）
-        committedVal.Text = Math.Round(_committedMb).ToString();  // 提交额度口径（含未驻留的私有提交）
+        usedNum.Text = (_usedMb / 1024).ToString("F1");            // 物理内存口径（驻留），按 GB 给
+        committedNum.Text = (_committedMb / 1024).ToString("F1"); // 提交额度口径（含未驻留的私有提交）
         tagCpu.Text = $"CPU {_sysCpu:F0}%";
         tagMem.Text = $"MEM {_memPct:F0}%";
         tagComp.Text = $"综合 {comp:F1}%";

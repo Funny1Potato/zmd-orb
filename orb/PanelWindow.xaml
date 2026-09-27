@@ -422,7 +422,7 @@
                   <DropShadowEffect BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"/>
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock x:Name="usedVal" Text="0" Style="{StaticResource MetricVal}" FontSize="24"/>
+                  <TextBlock Style="{StaticResource MetricVal}" FontSize="24"><Run x:Name="usedNum" Text="0"/><Run Text=" GB" FontSize="13"/></TextBlock>
                   <TextBlock Text="已占用内存" Style="{StaticResource MetricLbl}"/>
                 </StackPanel>
               </Border>
@@ -432,7 +432,7 @@
                 </Border.Effect>
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="已提交" Style="{StaticResource MetricLbl}"/>
-                  <TextBlock x:Name="committedVal" Text="—" Style="{StaticResource MetricVal}" FontSize="24"/>
+                  <TextBlock Style="{StaticResource MetricVal}" FontSize="24"><Run x:Name="committedNum" Text="—"/><Run Text=" GB" FontSize="13"/></TextBlock>
                 </StackPanel>
               </Border>
             </Grid>
