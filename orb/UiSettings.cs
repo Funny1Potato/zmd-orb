@@ -34,6 +34,10 @@ static class UiSettings
     /// <summary>形态：ball = 桌面悬浮球（默认）；tray = 只在托盘显示一个占用率圆环，不占桌面。</summary>
     public static string Mode { get; set; } = "ball";
 
+    /// <summary>有没有帮用户把托盘图标"固定到任务栏"过（Win11 默认收进溢出面板）。
+    /// 只做一次：之后用户若手动拖回溢出，我们不再抢。</summary>
+    public static bool TrayPromoted { get; set; }
+
     sealed class Dto
     {
         public double max_occ_mb { get; set; } = DefaultMaxOccMb;
@@ -41,6 +45,7 @@ static class UiSettings
         public double w_mem { get; set; } = DefWMem;
         public double poll_secs { get; set; } = 1.0;
         public string mode { get; set; } = "ball";
+        public bool tray_promoted { get; set; }
     }
 
     public static void Load()
@@ -55,6 +60,7 @@ static class UiSettings
             if (d.w_cpu + d.w_mem > 0) { WCpu = d.w_cpu; WMem = d.w_mem; }
             PollSecs = d.poll_secs > 0.2 ? d.poll_secs : 1.0;
             Mode = d.mode == "tray" ? "tray" : "ball";
+            TrayPromoted = d.tray_promoted;
         }
         catch (Exception e)
         {
@@ -75,6 +81,7 @@ static class UiSettings
                     w_mem = WMem,
                     poll_secs = PollSecs,
                     mode = Mode,
+                    tray_promoted = TrayPromoted,
                 },
                 new JsonSerializerOptions { WriteIndented = true }));
         }

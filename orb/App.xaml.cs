@@ -99,6 +99,10 @@ public partial class App : Application
                 _trayPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 _trayPoll.Tick += async (_, _) => await PollTrayAsync();
                 _trayPoll.Start();
+                // 顺手把图标固定到任务栏（只做一次；系统要先建好 NotifyIconSettings 条目，
+                // 首次可能还没有 → 等 3 秒再试一次，还不行就下次启动再说）
+                _ = Task.Delay(300).ContinueWith(_ => Dispatcher.Invoke(() => TrayPromote.TryPromote()));
+                _ = Task.Delay(3000).ContinueWith(_ => Dispatcher.Invoke(() => TrayPromote.TryPromote()));
             }
             _ = PollTrayAsync();
         }

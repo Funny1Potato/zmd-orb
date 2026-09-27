@@ -8,6 +8,48 @@ using System.Windows.Forms;
 namespace ZmdOrb;
 
 /// <summary>
+/// 把我们的托盘图标"固定到任务栏"（Win11 默认把新图标塞进「^」溢出面板）。
+/// 做法就是用户手动拖出来时系统自己写的那套：HKCU\Control Panel\NotifyIconSettings\&lt;hash&gt;
+/// 下按 ExecutablePath 找到我们那条，写 IsPromoted=1。**只做一次**（UiSettings.TrayPromoted 记住），
+/// 之后用户要是手动拖回溢出，我们不再抢。
+/// 需要重启一次资源管理器（或重新登录）生效——这条由用户决定，程序不擅自重启 explorer。
+/// </summary>
+static class TrayPromote
+{
+    const string Root = @"Control Panel\NotifyIconSettings";
+
+    /// <summary>返回 true 表示这次真的写了（下次就不写了）。</summary>
+    public static bool TryPromote()
+    {
+        if (UiSettings.TrayPromoted) return false;
+        try
+        {
+            string me = Autostart.ExePath;
+            using var root = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(Root);
+            if (root == null) return false;
+            foreach (var name in root.GetSubKeyNames())
+            {
+                using var k = root.OpenSubKey(name, true);
+                if (k?.GetValue("ExecutablePath") is not string path) continue;
+                if (!string.Equals(path, me, StringComparison.OrdinalIgnoreCase)) continue;
+                k.SetValue("IsPromoted", 1, Microsoft.Win32.RegistryValueKind.DWord);
+                UiSettings.TrayPromoted = true;
+                UiSettings.Save();
+                Diag.Log($"托盘：已把图标设为常驻任务栏（NotifyIconSettings\\{name} IsPromoted=1）；"
+                         + "重启一次资源管理器或重新登录生效");
+                return true;
+            }
+            Diag.Log("托盘：还没找到我们的 NotifyIconSettings 条目（等系统建好后下次启动再试）");
+        }
+        catch (Exception e)
+        {
+            Diag.Log("托盘：设置常驻任务栏失败：" + e.Message);
+        }
+        return false;
+    }
+}
+
+/// <summary>
 /// 托盘模式（M4）：不占桌面，只在通知区显示一个**能看出占用率**的小圆环 + 数字。
 /// 图标每次占用率（取整）变化时重画一次：16 逻辑像素（按 DPI 放大到 20/24/32）里画环 + 数字，
 /// 数字用 GDI+ 的抗锯齿渲染，环用和球面同一套配色（&lt;70 亮黄 / &lt;88 琥珀 / 否则橙红）。
