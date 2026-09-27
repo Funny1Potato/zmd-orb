@@ -20,7 +20,9 @@ static class Ring
     public const double DiscAlpha = 0.45; // 内盘的半透量级（磨砂盘的两个 alpha 停靠点就是照它定的）
 
     public static readonly Color Rail = Hex("#d3d3ce");
-    public static readonly Color Outline = Hex("#9a9a94");   // 描边：比衬环深一档，浮在任意桌面上都看得清
+    public static readonly Color Outline = Hex("#9a9a94");   // 深一档的描边色（当前只在大纲/命中测试用）
+    public static readonly Color Base = Hex("#f2f1ec");      // 环与两侧计量条的**底衬**：浅色半透，像磨砂底托
+                                                             // （原来是 #9a9a94 灰，看着灰蒙蒙，按反馈改白）
     public static readonly Color Track = Hex("#f8f6e6");     // 主环未占用段（比原来更浅，几乎只剩一点暖调）
     public static readonly Color ArcLow = Hex("#ffe23d");
     public static readonly Color ArcMid = Hex("#ecb063");
@@ -54,6 +56,36 @@ static class Ring
             c.ArcTo(Polar(cx, cy, r, to), new Size(r, r), 0,
                     to - from > 180, SweepDirection.Clockwise, true, false);
         }
+        g.Freeze();
+        return g;
+    }
+
+    /// <summary>圆环扇段（外弧 + 内弧回环 + 闭合）。用它做"浅色底 + 深色描边"：
+    /// 描边能顺着形状把**两端平头**也描上，这是"粗描边垫在底下、再压一条细的"那套做不到的
+    /// （那套只能露出两条长边，且底衬颜色会被描边色带灰）。</summary>
+    public static Geometry Sector(double cx, double cy, double rIn, double rOut, double from, double to)
+    {
+        if (to < from) to += 360;
+        bool large = to - from > 180;
+        var g = new StreamGeometry();
+        using (var c = g.Open())
+        {
+            c.BeginFigure(Polar(cx, cy, rOut, from), true, true);
+            c.ArcTo(Polar(cx, cy, rOut, to), new Size(rOut, rOut), 0, large, SweepDirection.Clockwise, true, false);
+            c.LineTo(Polar(cx, cy, rIn, to), true, false);
+            c.ArcTo(Polar(cx, cy, rIn, from), new Size(rIn, rIn), 0, large,
+                     SweepDirection.Counterclockwise, true, false);
+        }
+        g.Freeze();
+        return g;
+    }
+
+    /// <summary>整圈圆环：外圆 + 内圆的 EvenOdd 差集。</summary>
+    public static Geometry Annulus(double cx, double cy, double rIn, double rOut)
+    {
+        var g = new GeometryGroup { FillRule = FillRule.EvenOdd };
+        g.Children.Add(new EllipseGeometry(new Point(cx, cy), rOut, rOut));
+        g.Children.Add(new EllipseGeometry(new Point(cx, cy), rIn, rIn));
         g.Freeze();
         return g;
     }
