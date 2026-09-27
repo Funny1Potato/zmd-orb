@@ -141,6 +141,9 @@ sealed class TrayIcon : IDisposable
     /// <summary>画一个小图标：底衬圆环 + 进度弧 + 中间数字。</summary>
     static Icon Render(string text, double pct)
     {
+        /* 尺寸上限是**系统的**：托盘图标就画在 SM_CXSMICON 那个槽里（本机 125% 缩放 = 20px）。
+           实测按 32px 渲染也没用——系统会缩回 19~20px，所以想要"更大"只能在 20px 里做文章：
+           边距 0（外径吃满 20）、线宽 21%（约 4.2px，内圈还剩 11.6px 给数字）。 */
         int side = Math.Max(16, GetSystemMetrics(SM_CXSMICON));      // 125% 缩放时是 20
         using var bmp = new Bitmap(side, side, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -149,10 +152,9 @@ sealed class TrayIcon : IDisposable
             g.TextRenderingHint = TextRenderingHint.AntiAlias;
             g.Clear(Color.Transparent);
 
-            // 环尽量占满图标、线也粗一档（用户连着两次说"太小/太细"）：
-            // 边距 0、线宽 17%；20px 的槽里外径就是 20px，环心半径 8.3、内圈还有 13px 给数字
+            // 环吃满整格、线再粗一档（用户连着说"太小"）：边距 0、线宽 21%
             float pad = 0f;
-            float w = Math.Max(2.0f, side * 0.17f);                    // 环线宽
+            float w = Math.Max(2.2f, side * 0.21f);                    // 环线宽（20px 里约 4.2px）
             var rect = new RectangleF(pad + w / 2, pad + w / 2,
                                       side - pad * 2 - w, side - pad * 2 - w);
             // 底衬（浅色）——深色任务栏上也看得清
@@ -170,8 +172,8 @@ sealed class TrayIcon : IDisposable
                     g.DrawArc(arc, rect, -90, (float)(Math.Min(359.9, p * 3.6)));
             }
 
-            // 中间数字：按位数自适应字号，保证 100% 也能塞进圆里（环又粗了，数字跟着收一点）
-            float fontPx = side * (text.Length >= 3 ? 0.36f : text.Length == 2 ? 0.44f : 0.50f);
+            // 中间数字：按位数自适应字号（环粗了，内圈只剩 ~11.6px，字号要跟着收）
+            float fontPx = side * (text.Length >= 3 ? 0.34f : text.Length == 2 ? 0.42f : 0.48f);
             using var font = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel);
             var fmt = new StringFormat
             {
