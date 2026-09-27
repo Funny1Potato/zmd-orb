@@ -19,11 +19,23 @@
         HorizontalAlignment="Center" VerticalAlignment="Center"
         MouseEnter="Stage_MouseEnter" MouseLeave="Stage_MouseLeave"
         MouseLeftButtonDown="Stage_MouseLeftButtonDown" MouseLeftButtonUp="Stage_MouseLeftButtonUp"
-        MouseMove="Stage_MouseMove" MouseRightButtonUp="Stage_MouseRightButtonUp">
+        MouseMove="Stage_MouseMove">
 
     <Grid.RenderTransform>
       <ScaleTransform x:Name="StageScale" ScaleX="1" ScaleY="1"/>
     </Grid.RenderTransform>
+
+    <!-- 右键菜单（M4）：打开面板 / 轻度整理 / 切到托盘模式 / 退出（属性元素要写在内容之前） -->
+    <Grid.ContextMenu>
+      <ContextMenu x:Name="BallMenu" FontSize="12.5" FontFamily="Segoe UI, Microsoft YaHei">
+        <MenuItem Header="打开面板" Click="Menu_Panel"/>
+        <MenuItem Header="轻度整理（免提权）" Click="Menu_Clean"/>
+        <Separator/>
+        <MenuItem Header="切到托盘模式" Click="Menu_Mode"/>
+        <Separator/>
+        <MenuItem Header="退出" Click="Menu_Quit"/>
+      </ContextMenu>
+    </Grid.ContextMenu>
 
     <local:BallVisual x:Name="Visual"/>
 

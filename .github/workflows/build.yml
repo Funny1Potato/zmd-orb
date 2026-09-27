@@ -80,11 +80,29 @@ jobs:
           powershell -NoProfile -Command "Compress-Archive -Path '$PUB/*' -DestinationPath 'zmd-orb-win-x64.zip' -Force"
           ls -la zmd-orb-win-x64.zip
 
+      # 安装包（M4）：Inno Setup。版本号取 tag（v1.2.3 → 1.2.3），手动触发时给个 dev 版本
+      - name: Build installer (Inno Setup)
+        run: |
+          choco install innosetup --no-progress -y
+          # 中文语言包（Inno 非官方翻译，官方安装包不带；抓不到就只出英文向导）
+          curl -fsSL -o installer/ChineseSimplified.isl \
+            https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl \
+            || echo "⚠️ 中文语言包没抓到，安装向导只有英文"
+          VER="${GITHUB_REF_NAME#v}"
+          case "$GITHUB_REF_NAME" in v*) ;; *) VER="0.0.1-dev" ;; esac
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          "$ISCC" "/DMyAppVersion=$VER" \
+                  "/DMySourceDir=$(cygpath -w "$PWD/$PUB")" \
+                  "$(cygpath -w "$PWD/installer/zmd-orb.iss")"
+          ls -la dist/
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: zmd-orb-win-x64
-          path: zmd-orb-win-x64.zip
+          path: |
+            zmd-orb-win-x64.zip
+            dist/zmd-orb-setup-*.exe
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -92,5 +110,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: zmd-orb-win-x64.zip
+          files: |
+            zmd-orb-win-x64.zip
+            dist/zmd-orb-setup-*.exe
           generate_release_notes: true

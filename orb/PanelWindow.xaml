@@ -779,6 +779,14 @@
                   <TextBlock Text="最小间隔" Style="{StaticResource MiniLbl}"/>
                   <TextBox x:Name="setGap" Style="{StaticResource MiniBox}" Width="44"/>
                   <TextBlock Text="秒" Style="{StaticResource MiniLbl}"/>
+                  <CheckBox x:Name="chkAutostart" Content="开机自启" FontSize="12"
+                            Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
+                            Margin="4,0,0,0" Click="Autostart_Click"
+                            ToolTip="写 HKCU 的 Run 键（不需要管理员）。启动时用哪套形态，跟着上次用的走"/>
+                  <CheckBox x:Name="chkTrayMode" Content="托盘模式" FontSize="12"
+                            Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
+                            Margin="10,0,0,0" Click="TrayMode_Click"
+                            ToolTip="不显示桌面悬浮球，只在托盘里画一个占用率圆环；球右键菜单里也能切"/>
                   <Button x:Name="BtnSaveSet" Content="保存" Style="{StaticResource ActBtn}" Height="24"
                           Padding="12,0" Margin="6,0,0,0" Click="SaveSettings_Click"/>
                   <Button x:Name="BtnResetSet" Content="恢复默认" Style="{StaticResource GhostBtn}"

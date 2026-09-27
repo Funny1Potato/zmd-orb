@@ -31,12 +31,16 @@ static class UiSettings
     /// <summary>面板轮询间隔（秒）。</summary>
     public static double PollSecs { get; set; } = 1.0;
 
+    /// <summary>形态：ball = 桌面悬浮球（默认）；tray = 只在托盘显示一个占用率圆环，不占桌面。</summary>
+    public static string Mode { get; set; } = "ball";
+
     sealed class Dto
     {
         public double max_occ_mb { get; set; } = DefaultMaxOccMb;
         public double w_cpu { get; set; } = DefWCpu;
         public double w_mem { get; set; } = DefWMem;
         public double poll_secs { get; set; } = 1.0;
+        public string mode { get; set; } = "ball";
     }
 
     public static void Load()
@@ -50,6 +54,7 @@ static class UiSettings
             // 两个权重加起来必须 >0（旧的 ui.json 里没有这两项，会按上面 Dto 的默认值补上）
             if (d.w_cpu + d.w_mem > 0) { WCpu = d.w_cpu; WMem = d.w_mem; }
             PollSecs = d.poll_secs > 0.2 ? d.poll_secs : 1.0;
+            Mode = d.mode == "tray" ? "tray" : "ball";
         }
         catch (Exception e)
         {
@@ -69,6 +74,7 @@ static class UiSettings
                     w_cpu = WCpu,
                     w_mem = WMem,
                     poll_secs = PollSecs,
+                    mode = Mode,
                 },
                 new JsonSerializerOptions { WriteIndented = true }));
         }

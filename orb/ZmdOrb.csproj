@@ -4,6 +4,11 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net6.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- 托盘图标用 WinForms 的 NotifyIcon（M4）；WPF 与 WinForms 可以共存 -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- WinForms 只是为了托盘的 NotifyIcon；DPI 感知继续由 app.manifest 交给 WPF 管，
+         所以不接受 WFAC010 让我们改用 Application.SetHighDpiMode 的建议 -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <Nullable>enable</Nullable>
     <LangVersion>10.0</LangVersion>
     <AssemblyName>zmd-orb</AssemblyName>

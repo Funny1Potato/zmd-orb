@@ -231,11 +231,38 @@ public partial class PanelWindow : Window
         Prefill(setThreshold, s.AutoThresholdMb);
         Prefill(setCheck, s.AutoCheckSecs);
         Prefill(setGap, s.AutoMinGapSecs);
+        // 两个开关反映真实状态（自启看注册表，托盘模式看壳当前形态）
+        bool auto = Autostart.IsEnabled;
+        if (chkAutostart.IsChecked != auto) chkAutostart.IsChecked = auto;
+        bool tray = (Application.Current as App)?.Mode == "tray";
+        if (chkTrayMode.IsChecked != tray) chkTrayMode.IsChecked = tray;
     }
 
     static void Prefill(TextBox box, double value, string fmt = "F0")
     {
         if (!box.IsFocused && value > 0) box.Text = value.ToString(fmt);
+    }
+
+    /* ---- 开机自启 / 托盘模式（M4：两个开关，点了立刻生效，不跟"保存"按钮绑一起） ---- */
+
+    void Autostart_Click(object sender, RoutedEventArgs e)
+    {
+        bool want = chkAutostart.IsChecked == true;
+        bool ok = want ? Autostart.Enable() : Autostart.Disable();
+        if (!ok)
+        {
+            chkAutostart.IsChecked = !want;
+            setHint.Text = "开机自启没设置上（看日志）";
+            return;
+        }
+        setHint.Text = want ? "已设为开机自启" : "已取消开机自启";
+    }
+
+    void TrayMode_Click(object sender, RoutedEventArgs e)
+    {
+        bool want = chkTrayMode.IsChecked == true;
+        (Application.Current as App)?.SetMode(want ? "tray" : "ball");
+        setHint.Text = want ? "已切到托盘模式" : "已切回桌面悬浮球";
     }
 
     /* ---- 显示设置：综合分母 / 两项权重 / 刷新间隔（壳侧落盘）+ 自动整理三项与列表条数（采集端落盘） ---- */

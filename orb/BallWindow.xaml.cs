@@ -10,8 +10,9 @@ using System.Windows.Threading;
 namespace ZmdOrb;
 
 /// <summary>
-/// 悬浮球窗口。单击 = 轻度整理（免提权）、拖拽 = 移动窗口（整球限制在当前显示器工作区内）、
-/// 右键/双击 = 打开面板、取不到采集端就回落演示数据。
+/// 悬浮球窗口。单击 = 轻度整理（免提权）、拖拽 = 移动窗口（整球限制在某台显示器工作区内）、
+/// 双击 = 打开面板、右键 = 菜单（打开面板 / 轻度整理 / 切到托盘模式 / 退出）、
+/// 取不到采集端就回落演示数据。
 /// </summary>
 public partial class BallWindow : Window
 {
@@ -360,11 +361,15 @@ public partial class BallWindow : Window
         }
     }
 
-    void Stage_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-        (Application.Current as App)?.OpenPanel();
-    }
+    /* ---------------- 右键菜单（M4）：形态切换、打开面板、整理、退出 ---------------- */
+
+    void Menu_Panel(object sender, RoutedEventArgs e) => (Application.Current as App)?.OpenPanel();
+
+    void Menu_Clean(object sender, RoutedEventArgs e) => DoClean();
+
+    void Menu_Mode(object sender, RoutedEventArgs e) => (Application.Current as App)?.SetMode("tray");
+
+    void Menu_Quit(object sender, RoutedEventArgs e) => (Application.Current as App)?.QuitApp();
 
     /* ---------------- 浮字提示（只剩"冷却中/失败"这类短提示） ---------------- */
 
