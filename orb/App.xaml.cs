@@ -32,10 +32,20 @@ public partial class App : Application
         UiSettings.Load();
         Diag.Log("=== 壳启动 ===" + (e.Args.Length > 0 ? " 参数：" + string.Join(" ", e.Args) : ""));
 
-        /* 维护用（面板那个"开机自启"开关走的是同一套代码）：
-           zmd-orb.exe --autostart on|off —— 只改 Run 键然后退出，安装包/脚本也能这么调。 */
+        /* 维护用（面板那两个开关走的是同一套代码）：
+           zmd-orb.exe --autostart on|off / --lite on|off —— 只改设置然后退出，脚本/安装包也能这么调。 */
         for (int i = 0; i + 1 < e.Args.Length; i++)
         {
+            if (e.Args[i] == "--lite")
+            {
+                // 不能叫 on：外层（同一个 for 体）还有一个 bool on（CS0136）
+                bool liteOn = e.Args[i + 1] == "on";
+                UiSettings.Lite = liteOn;
+                UiSettings.Save();
+                Diag.Log($"命令行：轻量模式 {(liteOn ? "on（球不逐帧重画、采集按需）" : "off")}");
+                Shutdown();
+                return;
+            }
             if (e.Args[i] != "--autostart") continue;
             bool on = e.Args[i + 1] == "on";
             bool ok = on ? Autostart.Enable() : Autostart.Disable();
@@ -73,7 +83,7 @@ public partial class App : Application
 
         _backend = BackendProcess.Start();
         _ball = new BallWindow();
-        _panel = new PanelWindow { BallFps = () => _ball?.BlobFps ?? 0 };
+        // 面板不在这里构造：那棵视觉树（四页 + 六张卡 + 走势图）不打开就不该占内存，见 OpenPanel()
 
         // --mode tray|ball 优先于落盘的设置（安装包/开机自启都靠它决定形态）
         string mode = UiSettings.Mode;
@@ -96,7 +106,11 @@ public partial class App : Application
             if (_tray == null)
             {
                 _tray = new TrayIcon(OpenPanel, CleanNow, () => SetMode("ball"), QuitApp);
-                _trayPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                // 轻量模式放宽到 3 秒：托盘图标本来就是"取整变了才重画"，1 秒一次没必要
+                _trayPoll = new DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(UiSettings.Lite ? 3 : 1),
+                };
                 _trayPoll.Tick += async (_, _) => await PollTrayAsync();
                 _trayPoll.Start();
                 // 顺手把图标固定到任务栏（只做一次；系统要先建好 NotifyIconSettings 条目，
@@ -124,7 +138,7 @@ public partial class App : Application
         _trayBusy = true;
         try
         {
-            var s = await MemoryApi.GetAsync();
+            var s = await MemoryApi.GetAsync("none");   // 托盘也只要那两个数
             if (s == null)
             {
                 _tray.Update(double.NaN, "终末地加速球 · 采集端未启动");
@@ -156,9 +170,22 @@ public partial class App : Application
         }
     }
 
+    /// <summary>轻量模式开关的即时生效（面板勾选后调这里，不用重启）。</summary>
+    public void ApplyLite()
+    {
+        bool lite = UiSettings.Lite;
+        _ball?.SetLite(lite);
+        if (_trayPoll != null) _trayPoll.Interval = TimeSpan.FromSeconds(lite ? 3 : 1);
+        Diag.Log($"*** 轻量模式 = {(lite ? "开（球静止不重画、采集按需）" : "关")}");
+    }
+
     public void OpenPanel()
     {
-        if (_panel == null) return;
+        if (_panel == null)                        // 懒构造：不打开就不建那棵视觉树
+        {
+            _panel = new PanelWindow { BallFps = () => _ball?.BlobFps ?? 0 };
+            Diag.Log("面板：首次打开，按需构造");
+        }
         _panel.Show();
         _panel.Activate();
     }

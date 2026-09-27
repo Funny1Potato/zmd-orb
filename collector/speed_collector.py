@@ -53,11 +53,26 @@ INTERVAL = 1.0       # 球是常驻的，1s 足够；进程列表留到面板打
 THROTTLE = 30.0      # 手动整理后的冷却（秒）；壳那边只是 UI 提示，真正拦截在这里
 SETTLE = 1.0         # 整理后等列表稳定再测"后"
 ELEVATE_WAIT = 90.0  # 等用户点 UAC 的最长时间（秒）
+HEAVY_GRACE = 6.0    # "谁要重数据"的保鲜期（秒）：壳/面板在这段时间内要过就继续采，没人要就停
 
 state = {"snapshot": None, "last_result": None, "last_clean": 0.0, "cleaning": False,
          "fault_rate": None, "auto": {}, "auto_checked": 0.0, "auto_last": 0.0,
          "auto_count": 0, "auto_reason": "", "stat": {}, "procs": None, "procs_dt": None,
-         "procs_ts": 0.0, "cpu_perf": None, "cpu_seen_max": 0.0}
+         "procs_ts": 0.0, "cpu_perf": None, "cpu_seen_max": 0.0,
+         # 有没有人要"重"数据（由 /snapshot?want=… 续期）：进程列表 / 显卡磁盘
+         "want_procs_until": 0.0, "want_dev_until": 0.0, "_want_last": ""}
+_procs_lock = threading.Lock()   # 采样线程与 HTTP 线程都可能现采一帧，别让两次枚举叠在一起
+
+
+def wanted(kind):
+    """这会儿有人要重数据吗（kind = "procs" / "dev"）。
+
+    没人要就别采：采样线程每秒枚举 403 个进程、慢循环每 1.5 秒拉起一个 PowerShell 读显卡计数器，
+    而这些在"只看球"的时候全是白花的（球只要占用率与提交率两个数）。
+    """
+    return time.time() < (state.get("want_%s_until" % kind) or 0.0)
+
+
 _fault = None        # PdhRate，硬缺页率采样器（main() 里创建）
 _cpu_perf = None     # PdhRate，% Processor Performance（用于推算 CPU 实时频率）
 ntdll = ctypes.WinDLL("ntdll")
@@ -294,8 +309,9 @@ def sample_procs():
 
     两边各自算 Δ 会把"上一次采样"的窗口打乱，所以由采样线程统一负责。
     """
-    rows, dt = list_processes()
-    enrich(rows)
+    with _procs_lock:
+        rows, dt = list_processes()
+        enrich(rows)
     state["procs"] = rows
     state["procs_dt"] = dt
     state["procs_ts"] = time.time()
@@ -374,6 +390,12 @@ def build_snapshot(mem, rows):
 
     g = state.get("gpu") or {}
     vm = psutil.virtual_memory()
+    # 静态设备串放进 sys：这样面板"系统信息"页只要内存/CPU 那几个数就够了，
+    # 不必为了显示型号把显卡/磁盘的实时采样（慢循环里的 PowerShell）也一起拉起来
+    disks_txt = "；".join(dict.fromkeys(
+        (d["model"] + " · " + d["media"]) if (d.get("model") and d.get("media"))
+        else (d.get("model") or d.get("media") or "")
+        for d in stat.get("disks", [])))
     return {
         "ts": now, "interval": INTERVAL, "live": True,
         "admin": is_admin(),                       # 壳/面板据此提示"深度整理需要管理员"
@@ -404,7 +426,9 @@ def build_snapshot(mem, rows):
         "sys": {"host": stat.get("host"), "os": stat.get("os_name"),
                 "kernel": stat.get("kernel"), "arch": stat.get("arch"),
                 "boot": stat.get("boot"), "net_addrs": stat.get("net_addrs"),
-                "proc_ver": stat.get("proc_ver")},
+                "proc_ver": stat.get("proc_ver"),
+                "gpu_full": stat.get("gpu_full"), "gpu_mem_total": stat.get("gpu_mem_total"),
+                "disks": disks_txt, "net_link": stat.get("net_link")},
     }
 
 
@@ -419,7 +443,8 @@ def sampler():
                 v = _cpu_perf.sample()
                 if v is not None:
                     state["cpu_perf"] = v
-            rows = sample_procs()
+            # 进程列表只在有人要（面板开着 / /processes）时才枚举，否则复用上一份
+            rows = sample_procs() if wanted("procs") else (state.get("procs") or [])
             state["snapshot"] = build_snapshot(mem, rows)
             auto_tick()                       # 自动整理（默认关；只做免提权的 l1）
         except Exception as e:
@@ -1535,10 +1560,14 @@ def load_static():
 
 
 def slow_loop():
-    """显卡走 1.5 秒的慢循环（照搬参考的节奏）；硬盘计数器按需初始化后每轮采样。"""
+    """显卡走 1.5 秒的慢循环（照搬参考的节奏）；硬盘计数器按需初始化后每轮采样。
+
+    只有在有人要（面板设备页开着）时才跑：这一轮就是一次 PowerShell 启动（nvidia-smi 试一下、
+    失败再 Get-Counter），没人看设备页时纯属白烧 CPU——它的开销还不算在采集端进程自己头上。
+    """
     while True:
         try:
-            if state.get("stat"):
+            if state.get("stat") and wanted("dev"):
                 state["gpu"] = sample_gpu()
                 if not state.get("disk_counters"):
                     sample_disk_io()
@@ -1599,6 +1628,34 @@ class Handler(BaseHTTPRequestHandler):
                                    ensure_ascii=False))
         return False
 
+    def _snapshot(self, snap, q):
+        """按 /snapshot?want=… 裁一份回去，并给"要重数据"续期（HEAVY_GRACE 秒）。
+
+        want 缺省是 procs,dev —— 手工 curl 与 dev.html 照旧拿全量；壳这边球/托盘传 none、
+        面板按当前页传 procs 或 dev。裁掉的不只是网络流量：没人要时采样线程连进程都不枚举，
+        慢循环也不去拉那个 PowerShell。
+        """
+        want = ",".join(q.get("want") or ["procs,dev"]).lower()
+        if want in ("none", "light", "0", "-"):
+            want = ""
+        now = time.time()
+        if "procs" in want:
+            state["want_procs_until"] = now + HEAVY_GRACE
+            if now - (state.get("procs_ts") or 0) > 1.5:
+                sample_procs()      # 面板刚打开：现采一帧，别让首屏空着
+        if "dev" in want:
+            state["want_dev_until"] = now + HEAVY_GRACE
+        if want != state.get("_want_last"):
+            state["_want_last"] = want
+            log("[采集端] /snapshot 要的重数据：%s" % (want or "（无，只要内存/CPU）"))
+        out = dict(snap)
+        if "procs" not in want:
+            out.pop("procs", None)
+        if "dev" not in want:
+            for k in ("gpu", "disks", "net"):
+                out.pop(k, None)
+        return out
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path, q = parsed.path, urllib.parse.parse_qs(parsed.query)
@@ -1612,7 +1669,7 @@ class Handler(BaseHTTPRequestHandler):
             if snap is None:
                 self._send(503, json.dumps({"live": False, "error": "采样尚未就绪"}))
             else:
-                self._send(200, json.dumps(snap, ensure_ascii=False))
+                self._send(200, json.dumps(self._snapshot(snap, q), ensure_ascii=False))
             return
         if path.rstrip("/") == "/processes":
             rows = state.get("procs")

@@ -787,6 +787,10 @@
                             Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
                             Margin="10,0,0,0" Click="TrayMode_Click"
                             ToolTip="不显示桌面悬浮球，只在托盘里画一个占用率圆环；球右键菜单里也能切"/>
+                  <CheckBox x:Name="chkLite" Content="轻量模式" FontSize="12"
+                            Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
+                            Margin="10,0,0,0" Click="Lite_Click"
+                            ToolTip="外观不变，省的是常驻内存与 CPU：球静止时不再逐帧重画（那部分实测 50 MB / 12% 单核），托盘轮询放宽到 3 秒，采集端只在面板要用时才采进程/显卡/磁盘"/>
                   <Button x:Name="BtnSaveSet" Content="保存" Style="{StaticResource ActBtn}" Height="24"
                           Padding="12,0" Margin="6,0,0,0" Click="SaveSettings_Click"/>
                   <Button x:Name="BtnResetSet" Content="恢复默认" Style="{StaticResource GhostBtn}"

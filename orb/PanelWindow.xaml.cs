@@ -61,9 +61,9 @@ public partial class PanelWindow : Window
         UiSettings.Load();
         _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
         _poll.Tick += (_, _) => Poll();
-        _poll.Start();
         _tick.Tick += (_, _) => TickUi();
-        _tick.Start();
+        // 定时器不在构造里起：这个窗口现在**懒构造**（首次打开才建），
+        // 起来的那一刻 Loaded / IsVisibleChanged 会把它们启动（见下面两处）
         CompositionTarget.Rendering += OnFrame;
         IsVisibleChanged += (_, _) =>
         {
@@ -81,6 +81,8 @@ public partial class PanelWindow : Window
         Loaded += (_, _) =>
         {
             PreviewKeyDown += OnPreviewKeyDown;
+            _poll.Start();
+            _tick.Start();
             Poll();
             _ = LoadLastResultAsync();
         };
@@ -128,6 +130,7 @@ public partial class PanelWindow : Window
 
         string[] pageNames = { "综合占用", "设备性能", "应用内存", "整理与系统信息" };
         Diag.Log($"面板：切到第 {idx + 1} 页（{pageNames[idx]}）");
+        Poll();        // 这一页要的数据可能刚被跳过（按页取数），立刻补一次，别等下一拍
     }
 
     static IEasingFunction EaseOut() =>
@@ -135,13 +138,21 @@ public partial class PanelWindow : Window
 
     /* ================= 数据 ================= */
 
+    /// <summary>这次要向采集端要什么：只有当前页真用得到才要"重"数据——
+    /// 设备页要显卡/磁盘/网络，首页与应用内存页要进程列表，整理/系统信息页只要那几个数。
+    /// 采集端据此决定采不采（没人要时它既不枚举进程、也不拉 PowerShell 读显卡计数器）。</summary>
+    string Want() => !IsVisible ? "none"
+                   : _page == 1 ? "dev"
+                   : _page == 3 ? "none"
+                   : "procs";
+
     async void Poll()
     {
         if (_polling) return;
         _polling = true;
         try
         {
-            var s = await MemoryApi.GetAsync();
+            var s = await MemoryApi.GetAsync(Want());
             if (s == null)
             {
                 srcDot.Fill = DemoDot;
@@ -169,10 +180,11 @@ public partial class PanelWindow : Window
         if (limitMb > 0) _commitLimitMb = limitMb;
 
         _appLimit = s.AutoAppLimit > 0 ? (int)s.AutoAppLimit : 40;   // 显示条数来自采集端设置
-        SyncApps(s.Procs);
-        SyncDevices(BuildDevices(s));
-        SyncMem(s);
-        BuildSpecs(s);
+        // 只组装当前页用得到的：切页时下一次轮询（≤1 秒）就会补齐
+        if (_page == 0) SyncApps(s.Procs);              // 首页：应用概况
+        if (_page == 1) SyncDevices(BuildDevices(s));   // 设备页：设备行 + 走势
+        if (_page == 2) SyncMem(s);                     // 应用内存页：按应用聚合
+        if (_page == 3) BuildSpecs(s);                  // 系统信息页：规格网格（签名没变就不重建）
         UpdateOverview();
         // 数据回来了就把"采集端未启动"那行清掉：以前它只在轮询失败时写、没人清，
         // 于是采集端起来了提示还一直挂着（看起来像坏了）
@@ -180,10 +192,11 @@ public partial class PanelWindow : Window
         if (!_snapLogged)
         {
             _snapLogged = true;
-            Diag.Log($"面板：首帧数据 综合={Combined():F1}%（权重 CPU {UiSettings.WCpu:0.##} / 内存 {UiSettings.WMem:0.##}）"
+            Diag.Log($"面板：首帧数据（本页向采集端要的是 {Want()}）"
+                     + $"综合={Combined():F1}%（权重 CPU {UiSettings.WCpu:0.##} / 内存 {UiSettings.WMem:0.##}）"
                      + $" CPU={_sysCpu:F1}% 内存={_memPct:F1}% 分母={_maxOcc:F0}MB "
                      + $"已占用={_usedMb:F0}MB 已提交={_committedMb:F0}MB 应用={s.Procs.Count} 设备={_devices.Count} "
-                     + $"显卡={s.Gpu.Name}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
+                     + $"显卡={s.Sys.GpuFull}({s.Gpu.Util:F0}%) 磁盘={s.Disks.Count} 网络={s.Net.Name}");
             foreach (var d in _devices)
                 Diag.Log($"面板：设备行 {d.Name}｜{d.Sub}｜{d.Cur1Lbl} {d.Cur1Val}｜{d.Cur2Lbl} {d.Cur2Val}｜{d.Spec}"
                          + $"｜主 {d.Util:F2}{d.AxisUnit1} 次 {d.Linev:F2}{d.AxisUnit2}");
@@ -236,6 +249,7 @@ public partial class PanelWindow : Window
         if (chkAutostart.IsChecked != auto) chkAutostart.IsChecked = auto;
         bool tray = (Application.Current as App)?.Mode == "tray";
         if (chkTrayMode.IsChecked != tray) chkTrayMode.IsChecked = tray;
+        if (chkLite.IsChecked != UiSettings.Lite) chkLite.IsChecked = UiSettings.Lite;
     }
 
     static void Prefill(TextBox box, double value, string fmt = "F0")
@@ -263,6 +277,18 @@ public partial class PanelWindow : Window
         bool want = chkTrayMode.IsChecked == true;
         (Application.Current as App)?.SetMode(want ? "tray" : "ball");
         setHint.Text = want ? "已切到托盘模式" : "已切回桌面悬浮球";
+    }
+
+    /* ---- 轻量模式：球静止时不逐帧重画 + 托盘轮询放宽 + 采集按需（勾了立刻生效，落盘记住） ---- */
+
+    void Lite_Click(object sender, RoutedEventArgs e)
+    {
+        bool want = chkLite.IsChecked == true;
+        UiSettings.Lite = want;
+        UiSettings.Save();
+        (Application.Current as App)?.ApplyLite();
+        setHint.Text = want ? "已开轻量模式（球静止时不再重画）" : "已关轻量模式";
+        Poll();                       // 立刻按新设置重排一次（面板这边主要在下一轮生效）
     }
 
     /* ---- 显示设置：综合分母 / 两项权重 / 刷新间隔（壳侧落盘）+ 自动整理三项与列表条数（采集端落盘） ---- */
@@ -680,7 +706,7 @@ public partial class PanelWindow : Window
             double dt = (now - _lastFrame) / 1000.0;
             // 门控没过就直接返回，**不要**更新 _lastFrame：
             // 否则 60fps 回调下每帧都把基准重置，dt 恒为 ~16ms，条件永远不成立（粒子团就冻住了）
-            if (dt < 1.0 / 30) return;
+            if (dt < 1.0 / (UiSettings.Lite ? 12 : 30)) return;   // 轻量模式：这团 650 个粒子降到 12fps
             blob.Advance(Math.Min(dt, 0.1));
             _blobFrames++;
             if (_blobFrames == 120)      // 大约 4 秒后记一条，用来确认真的在动
@@ -858,14 +884,12 @@ public partial class PanelWindow : Window
     {
         var sys = s.Sys;
         string sig = $"{sys.Host}|{sys.Os}|{sys.Kernel}|{sys.Arch}|{sys.NetAddrs}"
-                   + $"|{s.Mem.TotalGb}|{s.Cpu.Full}|{s.Gpu.Full}|{s.Disks.Count}|{UiSettings.PollSecs}";
+                   + $"|{s.Mem.TotalGb}|{s.Cpu.Full}|{sys.GpuFull}|{sys.Disks}|{UiSettings.PollSecs}";
         if (sig == _specSig) return;      // 静态信息没变就别重建（1 秒一次的轮询不该反复重建 UI）
         _specSig = sig;
 
         var gb = s.Mem.TotalGb;
         _bootUnix = sys.BootUnix;
-        var disks = s.Disks.Select(d => (d.Model == "" ? d.Media : d.Model + " · " + d.Media))
-                           .Distinct().ToList();
         var rows = new List<SpecItem>
         {
             new("主机名", sys.Host.Length > 0 ? sys.Host : "—"),
@@ -876,11 +900,11 @@ public partial class PanelWindow : Window
             new("核心", $"{s.Cpu.Cores:F0} 核 / {s.Cpu.Threads:F0} 线程 · 基准 {s.Cpu.Base:F2} GHz"),
             new("内存", $"{gb:F1} GB · {s.Mem.Type} · {s.Mem.Speed}"
                         + (s.Mem.PerGb > 0 ? $" · {s.Mem.Modules:F0} × {s.Mem.PerGb:F0} GB" : "")),
-            new("显卡", (s.Gpu.Full.Length > 0 ? s.Gpu.Full : "—")
-                        + (s.Gpu.MemTotal > 0 ? $" · 显存 {s.Gpu.MemTotal:F1} GB" : "")),
-            new("磁盘", disks.Count > 0 ? string.Join("；", disks) : "—"),
+            new("显卡", (sys.GpuFull.Length > 0 ? sys.GpuFull : "—")
+                        + (sys.GpuMemTotal > 0 ? $" · 显存 {sys.GpuMemTotal:F1} GB" : "")),
+            new("磁盘", sys.Disks.Length > 0 ? sys.Disks : "—"),
             new("网络", (string.IsNullOrEmpty(sys.NetAddrs) ? "—" : sys.NetAddrs)
-                        + (s.Net.Link > 0 ? $" · {s.Net.Link:F0} Mbps" : "")),
+                        + (sys.NetLink > 0 ? $" · {sys.NetLink:F0} Mbps" : "")),
             new("数据目录", DataDir),
             new("日志文件", System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zmd_orb_shell.log")),
         };

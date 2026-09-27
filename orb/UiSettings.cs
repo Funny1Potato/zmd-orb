@@ -38,6 +38,10 @@ static class UiSettings
     /// 只做一次：之后用户若手动拖回溢出，我们不再抢。</summary>
     public static bool TrayPromoted { get; set; }
 
+    /// <summary>轻量模式：球静止时不逐帧重画、托盘轮询放宽、采集端只在面板要用时才采重数据。
+    /// 外观不变，省的是常驻的内存与 CPU（实测那 30fps 重画值 ~50 MB 私有 + 12% 单核）。</summary>
+    public static bool Lite { get; set; }
+
     sealed class Dto
     {
         public double max_occ_mb { get; set; } = DefaultMaxOccMb;
@@ -46,6 +50,7 @@ static class UiSettings
         public double poll_secs { get; set; } = 1.0;
         public string mode { get; set; } = "ball";
         public bool tray_promoted { get; set; }
+        public bool lite { get; set; }
     }
 
     public static void Load()
@@ -61,6 +66,7 @@ static class UiSettings
             PollSecs = d.poll_secs > 0.2 ? d.poll_secs : 1.0;
             Mode = d.mode == "tray" ? "tray" : "ball";
             TrayPromoted = d.tray_promoted;
+            Lite = d.lite;
         }
         catch (Exception e)
         {
@@ -82,6 +88,7 @@ static class UiSettings
                     poll_secs = PollSecs,
                     mode = Mode,
                     tray_promoted = TrayPromoted,
+                    lite = Lite,
                 },
                 new JsonSerializerOptions { WriteIndented = true }));
         }

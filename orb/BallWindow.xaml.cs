@@ -50,17 +50,47 @@ public partial class BallWindow : Window
         public bool Settling;          // false = 向 0 扫（等采集端结果）；true = 从 0 回涨到真实新值
         public double From, Target;
         public double FromCommit, TargetCommit;   // 右侧蓝条（提交额度）跟着做同一个手势
-        public TimeSpan T0;
+        public long T0;                // Environment.TickCount64：动画不依赖"有没有帧循环在跑"
     }
+
+    bool _frames;                      // 帧循环是否挂着
 
     public BallWindow()
     {
         InitializeComponent();
         Poll();
         _poll.Tick += (_, _) => Poll();
-        _poll.Start();
-        CompositionTarget.Rendering += OnFrame;
+        IsVisibleChanged += (_, _) => Ball_IsVisibleChanged();
         Loaded += (_, _) => { Render(); Diag.LogBallFacts(this); };
+        SyncFrames();
+    }
+
+    /// <summary>帧循环该不该跑：动画在跑就必须跑（不然动画推不动、`_busy` 会一直卡着）；
+    /// 其余情况只有"常规模式 + 球看得见"才跑。常驻的逐帧重画是这块最大的开销
+    /// （实测 +50 MB 私有、12% 单核），所以藏起来、或轻量模式下静止时都停掉。</summary>
+    void SyncFrames()
+    {
+        bool want = _anim != null || (!UiSettings.Lite && IsVisible);
+        if (_frames == want) return;
+        _frames = want;
+        if (want) CompositionTarget.Rendering += OnFrame;
+        else CompositionTarget.Rendering -= OnFrame;
+    }
+
+    /// <summary>面板上勾/取消"轻量模式"时立刻生效。</summary>
+    public void SetLite(bool lite)
+    {
+        SyncFrames();
+        Diag.Log(lite ? "球：轻量模式开，静止时不再逐帧重画" : "球：轻量模式关，恢复常驻动画");
+    }
+
+    void Ball_IsVisibleChanged()
+    {
+        // 藏起来（托盘模式）就别轮询、也别逐帧重画了：托盘自己那份轮询照旧，
+        // 两处各拉一次是白花的。托盘模式下球从头到尾没显示过，这个事件不会来。
+        if (IsVisible) _poll.Start();
+        else _poll.Stop();
+        SyncFrames();
     }
 
     /// <summary>粒子团实测帧率（面板上显示，用来盯常驻开销）。</summary>
@@ -98,7 +128,7 @@ public partial class BallWindow : Window
         _polling = true;
         try
         {
-            var s = await MemoryApi.GetAsync();
+            var s = await MemoryApi.GetAsync("none");   // 球只要占用率/提交率两个数：别让采集端顺带采进程与显卡
             if (s != null)
             {
                 _live = true;
@@ -170,7 +200,8 @@ public partial class BallWindow : Window
         _lastCleanTick = now;              // 先占住冷却：请求在飞的时候再点不该重入
         _busy = true;
         ScaleTo(1.09, 120);
-        _anim = new CleanAnim { From = _memPct, FromCommit = _commitPct, T0 = _now };   // 环与两条计量条一起向 0 扫，等结果
+        _anim = new CleanAnim { From = _memPct, FromCommit = _commitPct, T0 = now };   // 环与两条计量条一起向 0 扫，等结果
+        SyncFrames();                      // 动画起来了 → 帧循环开（轻量模式/藏起来时也是，动画期间必须跑）
         Diag.Log($"球被点击 → 轻度整理（tier={Tier}）");
 
         CleanResult res;
@@ -192,7 +223,7 @@ public partial class BallWindow : Window
             Settling = true,
             Target = double.IsNaN(res.PctAfter) ? _memPct : res.PctAfter,
             TargetCommit = _commitPct,      // 提交额度由轮询持续更新，落回最新值
-            T0 = _now,
+            T0 = Environment.TickCount64,
         };
         // 整理结果照旧弹字（带深色底，12pt，见 FloatBox）；口径与明细在日志/面板里
         _pendingFloat = BallLine(res);
@@ -212,6 +243,7 @@ public partial class BallWindow : Window
         Render();
         ScaleTo(_hover ? 1.05 : 1, 160);
         ShowFloat(text);
+        SyncFrames();                          // 动画收场：轻量模式/藏起来时就把帧循环关回去
     }
 
     void StepAnim()
@@ -220,7 +252,7 @@ public partial class BallWindow : Window
         if (!a.Settling)
         {
             // 先清零：环与两条计量条一起从当前值扫到 0 后停住等结果（深度档要等用户点 UAC，会停得久一些）
-            double k = Math.Min(1.0, (_now - a.T0).TotalMilliseconds / SweepMs);
+            double k = Math.Min(1.0, (Environment.TickCount64 - a.T0) / SweepMs);
             Visual.Pct = a.From * (1 - k);
             Visual.CommitPct = a.FromCommit * (1 - k);
             PctNum.Text = Math.Round(Visual.Pct).ToString();
@@ -228,7 +260,7 @@ public partial class BallWindow : Window
             return;
         }
 
-        double k2 = (_now - a.T0).TotalMilliseconds / SettleMs;
+        double k2 = (Environment.TickCount64 - a.T0) / SettleMs;
         if (k2 >= 1)
         {
             _anim = null;
@@ -237,6 +269,7 @@ public partial class BallWindow : Window
             Render();                              // 落回真实占用（真实值已在 DoClean 里更新过）
             ScaleTo(_hover ? 1.05 : 1, 160);
             ShowFloat(_pendingFloat);
+            SyncFrames();                          // 动画完了就不再逐帧重画（轻量模式/藏起来时）
             return;
         }
         double e = 1 - Math.Pow(1 - k2, 3);

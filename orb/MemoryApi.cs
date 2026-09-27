@@ -182,11 +182,14 @@ sealed class CleanResult
     public double PurgedGb => Math.Max(0, -StandbyDeltaMb) / 1024.0;
 }
 
-/// <summary>面板"系统信息"页用的机器与软件环境（采集端只在启动时采一次）。</summary>
+/// <summary>面板"系统信息"页用的机器与软件环境（采集端只在启动时采一次）。
+/// 显卡型号/硬盘/链路速率也放这儿（静态串）：这样这一页不必为了显示型号，
+/// 去把显卡与磁盘的实时采集（慢循环里的 PowerShell）一起拉起来。</summary>
 sealed class SysInfo
 {
     public string Host = "", Os = "", Kernel = "", Arch = "", NetAddrs = "";
-    public double BootUnix;
+    public string GpuFull = "", Disks = "";
+    public double GpuMemTotal, NetLink, BootUnix;
 }
 
 static class MemoryApi
@@ -205,11 +208,15 @@ static class MemoryApi
         return r;
     }
 
-    public static async Task<MemSnapshot?> GetAsync()
+    /// <summary>取一份快照。want 告诉采集端这次要不要顺带采"重"的东西——没人要它就不采：
+    ///   "none" = 只要内存/CPU 那几个数（球与托盘用）；"procs" = 还要进程列表（面板首页/应用内存页）；
+    ///   "dev" = 还要显卡/磁盘/网络（面板设备页）；"all" = 都要（不带参数，手工 curl 与 dev.html 用）。</summary>
+    public static async Task<MemSnapshot?> GetAsync(string want = "all")
     {
         try
         {
-            using var resp = await Http.GetAsync(BaseUrl + "/snapshot");
+            string url = BaseUrl + "/snapshot" + (want == "all" ? "" : "?want=" + want);
+            using var resp = await Http.GetAsync(url);
             if (!resp.IsSuccessStatusCode) return null;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
             var root = doc.RootElement;
@@ -310,6 +317,8 @@ static class MemoryApi
                     Host = Str(sy, "host"), Os = Str(sy, "os"), Kernel = Str(sy, "kernel"),
                     Arch = Str(sy, "arch"), NetAddrs = Str(sy, "net_addrs"),
                     BootUnix = Num(sy, "boot"),
+                    GpuFull = Str(sy, "gpu_full"), Disks = Str(sy, "disks"),
+                    GpuMemTotal = Num(sy, "gpu_mem_total"), NetLink = Num(sy, "net_link"),
                 };
             }
             return s;
