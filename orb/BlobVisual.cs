@@ -52,6 +52,7 @@ sealed class BlobVisual : FrameworkElement
 
     protected override void OnRender(DrawingContext dc)
     {
+        if (UiSettings.Lite) return;      // 轻量模式：面板也不画粒子团（环、数字、列表照旧）
         double s = ActualWidth > 1 ? ActualWidth : 290;
         double c = s / 2;
         double breath = 0.5 + 0.5 * Math.Sin(_t * 0.9);

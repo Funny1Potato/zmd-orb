@@ -38,8 +38,9 @@ static class UiSettings
     /// 只做一次：之后用户若手动拖回溢出，我们不再抢。</summary>
     public static bool TrayPromoted { get; set; }
 
-    /// <summary>轻量模式：球静止时不逐帧重画、托盘轮询放宽、采集端只在面板要用时才采重数据。
-    /// 外观不变，省的是常驻的内存与 CPU（实测那 30fps 重画值 ~50 MB 私有 + 12% 单核）。</summary>
+    /// <summary>轻量模式：不画粒子团/辉光/磨砂点纹理（球与面板都一样，只留环与数字）、
+    /// 球静止时不逐帧重画、托盘轮询放宽、采集端只在面板要用时才采重数据。
+    /// 省的是常驻的内存与 CPU（实测那 30fps 重画值 ~50 MB 私有 + 12% 单核）。</summary>
     public static bool Lite { get; set; }
 
     sealed class Dto

@@ -92,7 +92,7 @@ sealed class TrayIcon : IDisposable
         _lite = new ToolStripMenuItem("轻量模式")
         {
             CheckOnClick = true,
-            ToolTipText = "外观不变，省常驻内存与 CPU：球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡",
+            ToolTipText = "省常驻内存与 CPU：不画粒子团/辉光/点纹理（只留环+数字）、球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡",
         };
         _lite.Click += (_, _) => _setLite(_lite.Checked);
         _menu.Items.Add(_lite);

@@ -202,24 +202,33 @@ sealed class BallVisual : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         Frames++;
+        // 轻量模式：只留环 + 数字 —— 不画粒子团、不铺辉光、不画磨砂点纹理
+        // （用户选的"外观也变"：一眼能看出轻量开着，顺带把常驻那点图形开销也去掉）
+        bool lite = UiSettings.Lite;
 
         // 每条都先垫一层向下的柔影，再画底衬 + 细描边
         DrawBase(dc, _decoLeftBaseG);
         dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
         if (_decoLeftFillG != null)
         {
-            dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftFillG);
-            dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftFillG);
-            dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftFillG);
+            if (!lite)
+            {
+                dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftFillG);
+                dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftFillG);
+                dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftFillG);
+            }
             dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
         }
         DrawBase(dc, _decoRightBaseG);
         dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
         if (_decoRightFillG != null)
         {
-            dc.DrawGeometry(null, _decoGlowFar[1], _decoRightFillG);
-            dc.DrawGeometry(null, _decoGlowMid[1], _decoRightFillG);
-            dc.DrawGeometry(null, _decoGlowNear[1], _decoRightFillG);
+            if (!lite)
+            {
+                dc.DrawGeometry(null, _decoGlowFar[1], _decoRightFillG);
+                dc.DrawGeometry(null, _decoGlowMid[1], _decoRightFillG);
+                dc.DrawGeometry(null, _decoGlowNear[1], _decoRightFillG);
+            }
             dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
         }
 
@@ -227,22 +236,25 @@ sealed class BallVisual : FrameworkElement
         DrawBase(dc, _ringBaseG);                                   // 主环：柔影 + 底衬 + 细描边
         dc.DrawEllipse(null, _trackPen, c, Ring.R, Ring.R);
         dc.DrawEllipse(_discBrush, null, c, Ring.RDisc, Ring.RDisc);
-        dc.DrawGeometry(_frostDots, null, _discG);      // 磨砂盘上的细点纹理（裁在盘内）
+        if (!lite) dc.DrawGeometry(_frostDots, null, _discG);   // 磨砂盘上的细点纹理（裁在盘内）
 
         EnsureArc();
         EnsureDeco();
         if (_arc != null)
         {
             int ci = _arcPct < 70 ? 0 : _arcPct < 88 ? 1 : 2;
-            dc.PushClip(_glowClip);
-            dc.DrawGeometry(null, _glowFar[ci], _arc);
-            dc.DrawGeometry(null, _glowMid[ci], _arc);
-            dc.DrawGeometry(null, _glowNear[ci], _arc);
-            dc.Pop();
+            if (!lite)
+            {
+                dc.PushClip(_glowClip);
+                dc.DrawGeometry(null, _glowFar[ci], _arc);
+                dc.DrawGeometry(null, _glowMid[ci], _arc);
+                dc.DrawGeometry(null, _glowNear[ci], _arc);
+                dc.Pop();
+            }
             dc.DrawGeometry(null, _arcPen[ci], _arc);
         }
 
-        DrawBlob(dc);
+        if (!lite) DrawBlob(dc);
     }
 
     /// <summary>底衬的通用画法：[向下的柔影] → [浅色底衬 + 细描边]。

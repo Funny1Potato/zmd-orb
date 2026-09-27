@@ -279,7 +279,15 @@ public partial class PanelWindow : Window
         setHint.Text = want ? "已切到托盘模式" : "已切回桌面悬浮球";
     }
 
-    /* ---- 轻量模式：球静止时不逐帧重画 + 托盘轮询放宽 + 采集按需（勾了立刻生效，落盘记住） ---- */
+    /// <summary>轻量模式开关改了之后让页面重画一次：粒子团/辉光是"画不画"上关的，
+    /// 不主动重画的话，上一次带辉光的画面会一直留在屏幕上（轮询的取值守卫不会碰它）。</summary>
+    public void RefreshVisuals()
+    {
+        gauge.InvalidateVisual();
+        blob.InvalidateVisual();
+    }
+
+    /* ---- 轻量模式：不画粒子团与辉光 + 球静止时不逐帧重画 + 托盘轮询放宽 + 采集按需（勾了立刻生效） ---- */
 
     void Lite_Click(object sender, RoutedEventArgs e)
     {
@@ -698,13 +706,14 @@ public partial class PanelWindow : Window
     void OnFrame(object? sender, EventArgs e)
     {
         if (_page != 0 || !IsVisible) return;
+        if (UiSettings.Lite) return;      // 轻量模式：粒子团不画了，也就不必逐帧推进/重画
         long now = _since.ElapsedMilliseconds;
         if (_lastFrame != 0)
         {
             double dt = (now - _lastFrame) / 1000.0;
             // 门控没过就直接返回，**不要**更新 _lastFrame：
             // 否则 60fps 回调下每帧都把基准重置，dt 恒为 ~16ms，条件永远不成立（粒子团就冻住了）
-            if (dt < 1.0 / (UiSettings.Lite ? 12 : 30)) return;   // 轻量模式：这团 650 个粒子降到 12fps
+            if (dt < 1.0 / 30) return;
             blob.Advance(Math.Min(dt, 0.1));
             _blobFrames++;
             if (_blobFrames == 120)      // 大约 4 秒后记一条，用来确认真的在动

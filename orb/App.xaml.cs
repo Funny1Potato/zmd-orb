@@ -42,7 +42,7 @@ public partial class App : Application
                 bool liteOn = e.Args[i + 1] == "on";
                 UiSettings.Lite = liteOn;
                 UiSettings.Save();
-                Diag.Log($"命令行：轻量模式 {(liteOn ? "on（球不逐帧重画、采集按需）" : "off")}");
+                Diag.Log($"命令行：轻量模式 {(liteOn ? "on（不画粒子团/辉光、球不逐帧重画、采集按需）" : "off")}");
                 Shutdown();
                 return;
             }
@@ -183,8 +183,9 @@ public partial class App : Application
     {
         bool lite = UiSettings.Lite;
         _ball?.SetLite(lite);
+        _panel?.RefreshVisuals();        // 面板开着时也得重画一次（辉光/粒子是"画不画"上关的）
         if (_trayPoll != null) _trayPoll.Interval = TimeSpan.FromSeconds(lite ? 3 : 1);
-        Diag.Log($"*** 轻量模式 = {(lite ? "开（球静止不重画、采集按需）" : "关")}");
+        Diag.Log($"*** 轻量模式 = {(lite ? "开（不画粒子团/辉光，球静止不重画，采集按需）" : "关")}");
     }
 
     public void OpenPanel()

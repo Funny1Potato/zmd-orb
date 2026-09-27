@@ -114,8 +114,11 @@ sealed class GaugeVisual : FrameworkElement
         EnsureArc();
         if (_arc != null)
         {
-            dc.DrawGeometry(null, _glowFar, _arc);
-            dc.DrawGeometry(null, _glowNear, _arc);
+            if (!UiSettings.Lite)          // 轻量模式：不铺辉光，弧本身照旧
+            {
+                dc.DrawGeometry(null, _glowFar, _arc);
+                dc.DrawGeometry(null, _glowNear, _arc);
+            }
             dc.DrawGeometry(null, _arcPen, _arc);
         }
     }

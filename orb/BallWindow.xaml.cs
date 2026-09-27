@@ -81,7 +81,9 @@ public partial class BallWindow : Window
     public void SetLite(bool lite)
     {
         SyncFrames();
-        Diag.Log(lite ? "球：轻量模式开，静止时不再逐帧重画" : "球：轻量模式关，恢复常驻动画");
+        Visual.InvalidateVisual();   // 粒子团/辉光是从"画不画"上关的，得让球重画一次才看得出来
+        Diag.Log(lite ? "球：轻量模式开（不画粒子团/辉光，静止时不逐帧重画）"
+                      : "球：轻量模式关，粒子团/辉光与常驻动画都回来");
     }
 
     void Ball_IsVisibleChanged()

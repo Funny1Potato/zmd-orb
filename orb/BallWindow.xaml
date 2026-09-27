@@ -34,7 +34,7 @@
         <MenuItem Header="轻度整理（免提权）" Click="Menu_Clean"/>
         <Separator/>
         <MenuItem x:Name="miLite" Header="轻量模式" IsCheckable="True" Click="Menu_Lite"
-                  ToolTip="外观不变，省常驻内存与 CPU：球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡"/>
+                  ToolTip="省常驻内存与 CPU：不画粒子团/辉光/点纹理（只留环+数字）、球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡"/>
         <MenuItem Header="切到托盘模式" Click="Menu_Mode"/>
         <Separator/>
         <MenuItem Header="退出" Click="Menu_Quit"/>
