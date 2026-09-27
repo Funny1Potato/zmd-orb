@@ -43,6 +43,12 @@ static class UiSettings
     /// 省的是常驻的内存与 CPU（实测那 30fps 重画值 ~50 MB 私有 + 12% 单核）。</summary>
     public static bool Lite { get; set; }
 
+    /// <summary>球实际用的轮询间隔：轻量模式下至少 3 秒。
+    /// 实测壳的写合并内存在"球窗口在桌面上"时**按轮询次数**增长（1 秒 → ~10 MB/分，
+    /// 5 秒 → ~2.3 MB/分，灌到 40~70 MB 才停；托盘模式没有窗口则完全不涨），
+    /// 而内存占用率的整数显示本来十几秒才跳一次，1 秒的粒度是白花的。</summary>
+    public static double BallPollSecs => Lite ? Math.Max(3.0, PollSecs) : PollSecs;
+
     sealed class Dto
     {
         public double max_occ_mb { get; set; } = DefaultMaxOccMb;

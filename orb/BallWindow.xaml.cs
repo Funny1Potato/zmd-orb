@@ -59,15 +59,16 @@ public partial class BallWindow : Window
     {
         InitializeComponent();
         Poll();
-        _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
+        _poll.Interval = TimeSpan.FromSeconds(UiSettings.BallPollSecs);
         _poll.Tick += (_, _) => Poll();
         IsVisibleChanged += (_, _) => Ball_IsVisibleChanged();
         Loaded += (_, _) => { Render(); Diag.LogBallFacts(this); };
         SyncFrames();
     }
 
-    /// <summary>刷新间隔（面板"显示设置"里那个）——以前它只对面板生效，球硬编码 1 秒。</summary>
-    public void ApplyPollSecs() => _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
+    /// <summary>刷新间隔（面板"显示设置"里那个）——以前它只对面板生效，球硬编码 1 秒；
+    /// 轻量模式下球至少 3 秒（见 UiSettings.BallPollSecs）。</summary>
+    public void ApplyPollSecs() => _poll.Interval = TimeSpan.FromSeconds(UiSettings.BallPollSecs);
 
     /// <summary>帧循环该不该跑：动画在跑就必须跑（不然动画推不动、`_busy` 会一直卡着）；
     /// 其余情况只有"常规模式 + 球看得见"才跑。常驻的逐帧重画是这块最大的开销
@@ -155,22 +156,20 @@ public partial class BallWindow : Window
 
     /// <summary>球面只显示占用率一个数；提交额度由右侧蓝条表示，不再拿它给数字换色
     /// （球面那个数是内存占用率，跟提交额度不是一个口径）。
-    /// 弧/条按 <see cref="PctStep"/> 量化：占用率那点小数抖动（0.1%）肉眼看不出，
-    /// 但每次都让分层窗口重画一次，而每重画一次都会在图形管线里留下约 160 KB 写合并内存
-    /// （实测 1 秒一次 → ~10 MB/分，灌到 ~73 MB 才停）。量化后通常十几秒才会重画一次。</summary>
+    /// 弧/数字都按整数百分比更新：分层窗口**每重画一次**，图形管线里就留下一小块写合并内存
+    /// （~160 KB），而内存占用率每秒都在漂 —— 只有"整数变了"才重画，通常十几秒一次。</summary>
     void Render()
     {
         double p = Math.Max(0, Math.Min(100, _memPct));
-        Visual.Pct = Quant(p);
-        Visual.CommitPct = Quant(Math.Max(0, Math.Min(100, _commitPct)));
-        PctNum.Text = Math.Round(p).ToString();     // 数字仍按真实值取整（量化只作用在弧上）
+        // 弧与数字用同一个取整值：弧位置与数字永远一致，而且只有"整数百分比变了"才重画。
+        // 台阶要按整数来，别用 0.5%：内存占用率每秒漂 0.1~0.3%，0.5% 的台阶几乎每轮询都跨得过去，
+        // 于是又变成"每秒重画一次"（实测：台阶 0.5% → +10.5 MB/分；按整数 → 见 README）
+        int shown = (int)Math.Round(p);
+        Visual.Pct = shown;
+        Visual.CommitPct = Math.Round(Math.Max(0, Math.Min(100, _commitPct)));
+        PctNum.Text = shown.ToString();
         PctText.Foreground = _live ? Ink : Dim;
     }
-
-    /// <summary>弧的步进（%）。0.5% 在主环上约 1.8°，看不出台阶。</summary>
-    const double PctStep = 0.5;
-
-    static double Quant(double v) => Math.Round(v / PctStep) * PctStep;
 
     /* ---------------- 帧循环（30fps 封顶） ---------------- */
 

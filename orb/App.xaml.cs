@@ -184,6 +184,7 @@ public partial class App : Application
     {
         bool lite = UiSettings.Lite;
         _ball?.SetLite(lite);
+        _ball?.ApplyPollSecs();          // 轻量模式下球的轮询也放宽（见 UiSettings.BallPollSecs）
         _panel?.RefreshVisuals();        // 面板开着时也得重画一次（辉光/粒子是"画不画"上关的）
         if (_trayPoll != null) _trayPoll.Interval = TimeSpan.FromSeconds(lite ? 3 : 1);
         Diag.Log($"*** 轻量模式 = {(lite ? "开（不画粒子团/辉光，球静止不重画，采集按需）" : "关")}");
