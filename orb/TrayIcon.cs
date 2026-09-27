@@ -138,7 +138,8 @@ sealed class TrayIcon : IDisposable
         }
     }
 
-    /// <summary>画一个小图标：底衬圆环 + 进度弧 + 中间数字。</summary>
+    /// <summary>画一个小图标：进度弧 + 中间数字（不放底衬轨道——用户要求去掉那圈浅色"描边"，
+    /// 改成给弧垫一层向下的暗影，浅色任务栏上也立得住）。</summary>
     static Icon Render(string text, double pct)
     {
         /* 尺寸上限是**系统的**：托盘图标就画在 SM_CXSMICON 那个槽里（本机 125% 缩放 = 20px）。
@@ -157,21 +158,28 @@ sealed class TrayIcon : IDisposable
             float w = Math.Max(2.2f, side * 0.21f);                    // 环线宽（20px 里约 4.2px）
             var rect = new RectangleF(pad + w / 2, pad + w / 2,
                                       side - pad * 2 - w, side - pad * 2 - w);
-            // 底衬（浅色）——深色任务栏上也看得清
-            using (var track = new Pen(Color.FromArgb(230, 0xF2, 0xF1, 0xEC), w))
-                g.DrawEllipse(track, rect);
 
             // 进度弧：从 12 点顺时针，配色跟球面一致
             double p = Math.Max(0, Math.Min(100, pct));
             var col = p < 70 ? Color.FromArgb(0xFF, 0xE2, 0x3D)
                     : p < 88 ? Color.FromArgb(0xEC, 0xB0, 0x63)
                              : Color.FromArgb(0xE8, 0x70, 0x3A);
-            using (var arc = new Pen(col, w) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            if (p > 0.5)
             {
-                if (p > 0.5)
-                    g.DrawArc(arc, rect, -90, (float)(Math.Min(359.9, p * 3.6)));
+                float sweep = (float)Math.Min(359.9, p * 3.6);
+                // 阴影：同一段弧用更宽的半透明黑垫在下面、整体往右下偏一点点（GDI+ 没有模糊，
+                // 这是一层"硬阴影"近似；叠在浅色任务栏上能明显看出弧的边界）
+                using (var shadow = new Pen(Color.FromArgb(64, 0, 0, 0), w + 1.6f)
+                                    { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                {
+                    var st = g.Save();
+                    g.TranslateTransform(0.6f, 1.0f);
+                    g.DrawArc(shadow, rect, -90, sweep);
+                    g.Restore(st);
+                }
+                using (var arc = new Pen(col, w) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawArc(arc, rect, -90, sweep);
             }
-
             // 中间数字：按位数自适应字号（环粗了，内圈只剩 ~11.6px，字号要跟着收）
             float fontPx = side * (text.Length >= 3 ? 0.34f : text.Length == 2 ? 0.42f : 0.48f);
             using var font = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel);
