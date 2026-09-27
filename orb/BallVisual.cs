@@ -15,10 +15,10 @@ sealed class BallVisual : FrameworkElement
 
     const int Buckets = 20;                  // 粒子透明度分档：避免每帧新建 120 个画刷
     // 未占到段的透明度：两侧计量条细，0.35 就够；主环那条带更窄（6.5），太透会糊掉看不见，
-    // 所以单独给高一档（配 0.40 的衬底，整体约七成实、三成透）
+    // 所以单独给高一档（配 0.50 的衬底，整体约八成半实）
     const double TrackAlpha = 0.35;      // 两侧计量条的底槽
-    const double RailAlpha = 0.40;       // 主环的衬底（描边带）
-    const double RingTrackAlpha = 0.55;  // 主环未占用段
+    const double RailAlpha = 0.50;       // 主环的衬底（描边带）
+    const double RingTrackAlpha = 0.72;  // 主环未占用段（用户要求再实一点）
 
     readonly P[] _pts = new P[Ring.Particles];
     readonly double[] _phase = new double[Ring.Particles];
@@ -27,6 +27,7 @@ sealed class BallVisual : FrameworkElement
     readonly Geometry _decoLeftUnderG, _decoLeftTrackG, _decoRightUnderG, _decoRightTrackG, _glowClip;
     readonly Pen _decoUnder, _decoLeftPen, _decoLeftTrack, _decoRightPen, _decoRightTrack, _railPen, _trackPen;
     readonly Pen[] _arcPen = new Pen[3], _glowNear = new Pen[3], _glowMid = new Pen[3], _glowFar = new Pen[3];
+    readonly Pen[] _decoGlowNear = new Pen[2], _decoGlowMid = new Pen[2], _decoGlowFar = new Pen[2];
     readonly Brush _discBrush, _frostDots;
     readonly Geometry _discG;
 
@@ -118,6 +119,15 @@ sealed class BallVisual : FrameworkElement
             _glowFar[i] = Pen(colors[i], Ring.WTrack + 12, 0.06, round: true);
         }
 
+        // 两侧计量条的填充段也带同样的辉光（用户要求），颜色用各自的橙 / 蓝
+        var decoColors = new[] { Ring.DecoLeft, Ring.DecoRight };
+        for (int i = 0; i < 2; i++)
+        {
+            _decoGlowNear[i] = Pen(decoColors[i], Ring.WDeco + 4, 0.26, round: true);
+            _decoGlowMid[i] = Pen(decoColors[i], Ring.WDeco + 8, 0.13, round: true);
+            _decoGlowFar[i] = Pen(decoColors[i], Ring.WDeco + 12, 0.06, round: true);
+        }
+
         /* 辉光要裁掉主环内缘以内的部分：最外层描边是 52±9.25，会糊到内盘(43)与主环之间
            那道透明缝上（实测在红底上留下 7% 的黄）。裁到主环内缘(=不透明衬底的起点)，
            剪影正好落在衬底边缘上，看不出硬边。 */
@@ -179,10 +189,22 @@ sealed class BallVisual : FrameworkElement
 
         dc.DrawGeometry(null, _decoUnder, _decoLeftUnderG);
         dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
-        if (_decoLeftFillG != null) dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
+        if (_decoLeftFillG != null)
+        {
+            dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftFillG);
+            dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftFillG);
+            dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftFillG);
+            dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
+        }
         dc.DrawGeometry(null, _decoUnder, _decoRightUnderG);
         dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
-        if (_decoRightFillG != null) dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
+        if (_decoRightFillG != null)
+        {
+            dc.DrawGeometry(null, _decoGlowFar[1], _decoRightFillG);
+            dc.DrawGeometry(null, _decoGlowMid[1], _decoRightFillG);
+            dc.DrawGeometry(null, _decoGlowNear[1], _decoRightFillG);
+            dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
+        }
 
         var c = new Point(Ring.Cx, Ring.Cy);
         dc.DrawEllipse(null, _railPen, c, Ring.R, Ring.R);

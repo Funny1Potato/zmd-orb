@@ -48,6 +48,7 @@ public partial class BallWindow : Window
     {
         public bool Settling;          // false = 向 0 扫（等采集端结果）；true = 从 0 回涨到真实新值
         public double From, Target;
+        public double FromCommit, TargetCommit;   // 右侧蓝条（提交额度）跟着做同一个手势
         public TimeSpan T0;
     }
 
@@ -168,7 +169,7 @@ public partial class BallWindow : Window
         _lastCleanTick = now;              // 先占住冷却：请求在飞的时候再点不该重入
         _busy = true;
         ScaleTo(1.09, 120);
-        _anim = new CleanAnim { From = _memPct, T0 = _now };   // 环向上扫，等采集端结果
+        _anim = new CleanAnim { From = _memPct, FromCommit = _commitPct, T0 = _now };   // 环与两条计量条一起向 0 扫，等结果
         Diag.Log($"球被点击 → 轻度整理（tier={Tier}）");
 
         CleanResult res;
@@ -189,6 +190,7 @@ public partial class BallWindow : Window
         {
             Settling = true,
             Target = double.IsNaN(res.PctAfter) ? _memPct : res.PctAfter,
+            TargetCommit = _commitPct,      // 提交额度由轮询持续更新，落回最新值
             T0 = _now,
         };
         // 整理结果照旧弹字（带深色底，12pt，见 FloatBox）；口径与明细在日志/面板里
@@ -216,9 +218,10 @@ public partial class BallWindow : Window
         var a = _anim!;
         if (!a.Settling)
         {
-            // 先清零：环从当前值扫到 0 后停住等结果（深度档可能要等用户点 UAC，会停得久一些）
+            // 先清零：环与两条计量条一起从当前值扫到 0 后停住等结果（深度档要等用户点 UAC，会停得久一些）
             double k = Math.Min(1.0, (_now - a.T0).TotalMilliseconds / SweepMs);
             Visual.Pct = a.From * (1 - k);
+            Visual.CommitPct = a.FromCommit * (1 - k);
             PctNum.Text = Math.Round(Visual.Pct).ToString();
             Visual.SetBreathe(1 - 0.22 * k, 1 - 0.5 * k);   // 被"吸住"的观感
             return;
@@ -237,6 +240,7 @@ public partial class BallWindow : Window
         }
         double e = 1 - Math.Pow(1 - k2, 3);
         Visual.Pct = a.Target * e;                 // 从 0 回涨到整理后的真实占用
+        Visual.CommitPct = a.TargetCommit * e;     // 蓝条同步回涨到最新提交额度占用率
         PctNum.Text = Math.Round(Visual.Pct).ToString();
         Visual.SetBreathe(1, 1);
     }
