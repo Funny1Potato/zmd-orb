@@ -21,14 +21,16 @@ static class Ring
 
     public static readonly Color Rail = Hex("#d3d3ce");
     public static readonly Color Outline = Hex("#9a9a94");   // 描边：比衬环深一档，浮在任意桌面上都看得清
-    public static readonly Color Track = Hex("#f2edc4");
+    public static readonly Color Track = Hex("#f8f6e6");     // 主环未占用段（比原来更浅，几乎只剩一点暖调）
     public static readonly Color ArcLow = Hex("#ffe23d");
     public static readonly Color ArcMid = Hex("#ecb063");
     public static readonly Color ArcHigh = Hex("#e8703a");
     public static readonly Color DecoLeft = Hex("#ecb063");
     public static readonly Color DecoRight = Hex("#7fb2cc");
+    // 计量条底槽：各自弧色的**浅色版**（与弧同色系），再叠半透明
+    public static readonly Color DecoLeftTrack = Hex("#f3d6b9");
+    public static readonly Color DecoRightTrack = Hex("#cbe0ed");
     public static readonly Color Disc = Hex("#ededea");
-    public static readonly Color FrostTrack = Hex("#f7f7f4");   // 计量条底槽：浅色半透（磨砂感）
     public static readonly Color FrostDot = Hex("#ffffff");      // 内盘磨砂纹理的点色
     public static readonly Color BlobRgb = Hex("#60605c");
 

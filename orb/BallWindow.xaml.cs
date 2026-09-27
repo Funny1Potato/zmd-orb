@@ -196,7 +196,7 @@ public partial class BallWindow : Window
         Diag.Log($"整理完成 {res.Tier}：{res.Summary}｜{res.Detail}");
     }
 
-    /// <summary>球上的短文案。球窗口只有 160px 宽，长文案会被裁掉，明细留给面板。</summary>
+    /// <summary>球上的短文案。球面只有 160px 宽（窗口 180 是为了给放大留余量），长文案会被裁掉。</summary>
     static string BallLine(CleanResult r) => r.Tier == "l1"
         ? "换出 " + r.MovedGb.ToString("F1") + "G 工作集"
         : "整理 " + r.PurgedGb.ToString("F1") + "G 缓存页";

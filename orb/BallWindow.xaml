@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ZmdOrb"
         Title="zmd-orb"
-        Width="160" Height="160" Left="1200" Top="220"
+        Width="180" Height="180" Left="1200" Top="220"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" Topmost="True" ShowInTaskbar="False" ShowActivated="False"
         WindowStartupLocation="Manual" UseLayoutRounding="True" SnapsToDevicePixels="True"
@@ -11,8 +11,12 @@
 
   <!-- 透明底 + 分层窗口：窗口移动由 DWM 直接合成，不再触发内容重绘，
        也就没有 WebView2 那套"移动/切焦点后 alpha 丢失泛底"的问题。
-       分层窗口按像素 alpha 命中测试，四角的透明像素自动点击穿透，不需要 SetWindowRgn。 -->
-  <Grid x:Name="Stage" Background="Transparent" RenderTransformOrigin="0.5,0.5"
+       分层窗口按像素 alpha 命中测试，四角的透明像素自动点击穿透，不需要 SetWindowRgn。
+
+       窗口 180、内容（Stage）160 居中：给点击时的放大留 10px 余量，
+       否则 1.09 倍会让装饰弧顶到窗口边缘被裁一条（悬停 1.05 倍也一样）。 -->
+  <Grid x:Name="Stage" Width="160" Height="160" Background="Transparent" RenderTransformOrigin="0.5,0.5"
+        HorizontalAlignment="Center" VerticalAlignment="Center"
         MouseEnter="Stage_MouseEnter" MouseLeave="Stage_MouseLeave"
         MouseLeftButtonDown="Stage_MouseLeftButtonDown" MouseLeftButtonUp="Stage_MouseLeftButtonUp"
         MouseMove="Stage_MouseMove" MouseRightButtonUp="Stage_MouseRightButtonUp">

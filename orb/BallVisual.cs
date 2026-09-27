@@ -67,9 +67,9 @@ sealed class BallVisual : FrameworkElement
         _decoUnder = Pen(Ring.Outline, Ring.WDeco + 2 * ow);
         _decoLeftPen = Pen(Ring.DecoLeft, Ring.WDeco, 0.95);
         _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
-        // 没占到的那一段：浅色半透（磨砂玻璃那种"一层雾"的底），不再用弧色淡化
-        _decoLeftTrack = Pen(Ring.FrostTrack, Ring.WDeco, 0.62);
-        _decoRightTrack = Pen(Ring.FrostTrack, Ring.WDeco, 0.62);
+        // 没占到的那一段：各自弧色的浅色版 + 半透明（同色系，像一层薄雾打底）
+        _decoLeftTrack = Pen(Ring.DecoLeftTrack, Ring.WDeco, 0.62);
+        _decoRightTrack = Pen(Ring.DecoRightTrack, Ring.WDeco, 0.62);
         _railPen = Pen(Ring.Outline, Ring.WTrack + 2 * ow);   // 衬底 = 轨道宽 + 两侧描边，形成均匀一圈描边
         _trackPen = Pen(Ring.Track, Ring.WTrack);
         /* 中间的盘：浅色半透 + 一层细点纹理，做出"磨砂玻璃"的观感。
