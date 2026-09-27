@@ -138,8 +138,27 @@ sealed class TrayIcon : IDisposable
         }
     }
 
+    /// <summary>任务栏现在是浅色还是深色——跟系统的 Windows 模式走（`SystemUsesLightTheme`，
+    /// 任务栏/通知区就是它管的；读不到再看 App 模式）。数字颜色据此取深灰或白：
+    /// 浅色任务栏上白字看不清，深色任务栏上深灰同理。</summary>
+    static bool LightTaskbar()
+    {
+        try
+        {
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            if (k?.GetValue("SystemUsesLightTheme") is int sys) return sys != 0;
+            if (k?.GetValue("AppsUseLightTheme") is int app) return app != 0;
+        }
+        catch (Exception e)
+        {
+            Diag.Log("读系统主题失败：" + e.Message);
+        }
+        return true;      // 读不到就按浅色（Windows 默认）
+    }
+
     /// <summary>画一个小图标：进度弧 + 中间数字（不放底衬轨道——用户要求去掉那圈浅色"描边"，
-    /// 改成给弧垫一层向下的暗影，浅色任务栏上也立得住）。</summary>
+    /// 也不要阴影，弧是唯一元素）。</summary>
     static Icon Render(string text, double pct)
     {
         /* 尺寸上限是**系统的**：托盘图标就画在 SM_CXSMICON 那个槽里（本机 125% 缩放 = 20px）。
@@ -167,20 +186,11 @@ sealed class TrayIcon : IDisposable
             if (p > 0.5)
             {
                 float sweep = (float)Math.Min(359.9, p * 3.6);
-                // 阴影：同一段弧用更宽的半透明黑垫在下面、整体往右下偏一点点（GDI+ 没有模糊，
-                // 这是一层"硬阴影"近似；叠在浅色任务栏上能明显看出弧的边界）
-                using (var shadow = new Pen(Color.FromArgb(64, 0, 0, 0), w + 1.6f)
-                                    { StartCap = LineCap.Round, EndCap = LineCap.Round })
-                {
-                    var st = g.Save();
-                    g.TranslateTransform(0.6f, 1.0f);
-                    g.DrawArc(shadow, rect, -90, sweep);
-                    g.Restore(st);
-                }
                 using (var arc = new Pen(col, w) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                     g.DrawArc(arc, rect, -90, sweep);
             }
-            // 中间数字：按位数自适应字号（环粗了，内圈只剩 ~11.6px，字号要跟着收）
+            // 中间数字：颜色跟系统主题走（浅色任务栏上用深灰、深色任务栏上用白），
+            // 字号按位数自适应（环粗了，内圈只剩 ~11.6px）
             float fontPx = side * (text.Length >= 3 ? 0.34f : text.Length == 2 ? 0.42f : 0.48f);
             using var font = new Font("Segoe UI", fontPx, FontStyle.Bold, GraphicsUnit.Pixel);
             var fmt = new StringFormat
@@ -188,7 +198,9 @@ sealed class TrayIcon : IDisposable
                 Alignment = StringAlignment.Center,
                 LineAlignment = StringAlignment.Center,
             };
-            using var brush = new SolidBrush(Color.FromArgb(0x3F, 0x3F, 0x3C));
+            using var brush = new SolidBrush(LightTaskbar()
+                ? Color.FromArgb(0x3F, 0x3F, 0x3C)      // 浅色模式：深灰
+                : Color.White);                          // 深色模式：白
             g.DrawString(text, font, brush, new RectangleF(0, 0, side, side), fmt);
         }
 
