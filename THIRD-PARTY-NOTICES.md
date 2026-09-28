@@ -7,6 +7,10 @@
 | **Lucide Icons** | 界面 24×24 描边图标（`orb/IconFactory.cs` 的路径数据） | ISC；其中衍生自 Feather 的那批为 MIT（© Cole Bemis） | [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt)（随仓库与发布包一起分发） |
 | Inno Setup 中文语言包 | 安装包向导的中文（`installer/ChineseSimplified.isl`） | 社区翻译（维护者 Zhenghan Yang / kira-96），具体条款**待确认** | 只在编译安装包时用到，不参与程序运行 |
 
+上面的许可全文（Lucide 的 ISC 全文、其中衍生自 Feather 那批的 MIT 段与版权声明）在
+[THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt)，随仓库与发布包（绿色版压缩包、安装目录）
+一起分发；`LICENSE` 里只放本项目自己的 MIT 正文。
+
 ## 致谢
 
 界面风格取自《明日方舟：终末地》协议核心电量面板。项目起步时基于
