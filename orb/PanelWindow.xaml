@@ -1173,17 +1173,26 @@
               <StackPanel Grid.Column="0" Orientation="Horizontal">
                 <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2"
                                 Stroke="{StaticResource OnPlate}"/>
-                <TextBlock Text="应用" Style="{StaticResource StripText}"/>
+                <TextBlock x:Name="headMemName" Text="应用" Style="{StaticResource StripText}"
+                           Cursor="Hand" ToolTip="点一下按名称排序"
+                           MouseLeftButtonUp="MemSort_Name"/>
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
                 <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2"
                                 Stroke="{StaticResource OnPlate}"/>
                 <TextBlock Text="内存占用率走势" Style="{StaticResource StripText}"/>
               </StackPanel>
+              <!-- 两列数值各自可点：排序键就是这两个（箭头由代码追加在标题后） -->
               <StackPanel Grid.Column="2" Orientation="Horizontal">
                 <local:IconView Key="mem" Width="14" Height="14" StrokeThickness="2"
                                 Stroke="{StaticResource OnPlate}"/>
-                <TextBlock Text="当前数据" Style="{StaticResource StripText}"/>
+                <TextBlock x:Name="headMemOcc" Text="已占用" Style="{StaticResource StripText}"
+                           Cursor="Hand" ToolTip="点一下按已占用排序"
+                           MouseLeftButtonUp="MemSort_Occ"/>
+                <TextBlock Text="·" Style="{StaticResource StripText}" Margin="6,0,0,0"/>
+                <TextBlock x:Name="headMemCommit" Text="已提交" Style="{StaticResource StripText}"
+                           Cursor="Hand" ToolTip="点一下按已提交排序"
+                           MouseLeftButtonUp="MemSort_Commit"/>
               </StackPanel>
               <StackPanel Grid.Column="3" Orientation="Horizontal">
                 <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2"

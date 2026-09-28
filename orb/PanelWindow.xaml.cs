@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
@@ -39,9 +40,12 @@ public partial class PanelWindow : Window
     long _lastFrame;
 
     // ---- 页1 应用概况 / 页2 设备 ----
-    List<AppRow> _appRows = new();
+    // 列表绑的就是这两个集合本身（构造时挂一次，之后只增删/移动，**永不整体替换 ItemsSource**）。
+    // 替换会让 WPF 把一屏容器连同图标、迷你条、走势图全丢掉重建；列表每秒刷一次，就是每秒一次
+    // 的白工（也是内存泄漏的入口，见构造里的 FreezeResources）。
+    readonly ObservableCollection<AppRow> _appRows = new();
+    readonly Dictionary<int, AppRow> _appPool = new();   // pid → 行对象：复用，不每秒造新的
     List<AppInfo> _lastApps = new();
-    string _appSig = "";
     string _appSort = "Cpu";            // 应用概况排序：Cpu / Mem / Name（点表头切换）
     bool _appSortDesc = true;
     int _appLimit = 40;                 // 显示条数（来自采集端的 app_limit 设置）
@@ -83,11 +87,14 @@ public partial class PanelWindow : Window
         InitializeComponent();
         // 资源里的 Freezable（画刷、几何、投影）一律先冻上再共享。
         // 共享**未冻结**的 Freezable 会给每个用到它的元素挂一份"继承上下文"，于是资源字典这个
-        // 长生根把那些元素全钉住不放：应用列表每秒重建一次容器，内存就一路涨（实测 40 行/秒 →
+        // 长生根把那些元素全钉住不放：列表的行来来去去，旧容器却回收不掉（实测 40 行/秒 →
         // 托管堆 +0.34 MB/s、工作集 +0.6 MB/s，跑四十来分钟能到 2 GB；不冻结的 DropShadowEffect
         // 最明显 —— 它每被用一次就多挂一份上下文）。冻结之后这些引用全部消失，观感不变。
         FreezeResources(Resources);
         if (Application.Current is { } app) FreezeResources(app.Resources);
+        // 两个列表只在挂一次集合：之后靠对账在集合里增删/移动，容器跟着复用（见 _appRows 字段）
+        appList.ItemsSource = _appRows;
+        memList.ItemsSource = _memRows;
         UiSettings.Load();
         // "显示设置"是一张**表单**：输入框与三个勾选框都只改界面，点「保存」才一起生效
         // （轻量那条会顺带重启，见 SaveSettings_Click）。谁被用户动过就置 _settingsTouched，
@@ -430,24 +437,43 @@ public partial class PanelWindow : Window
     static double Parse(TextBox box, double fallback) =>
         double.TryParse(box.Text.Trim(), out var v) && v >= 0 ? v : fallback;
 
-    /* ---- 页1：应用概况（排序 + 显示条数由本页决定；按 pid 序列判断是重建还是就地更新） ---- */
+    /* ---- 页1：应用概况（排序 + 显示条数由本页决定；行对象按 pid 复用，集合只做增删/移动） ---- */
+
+    /// <summary>把绑定用的集合对账成 desired 这个顺序：多出来的删掉、新来的插进去、名次变了的挪位置。
+    /// 只动**变动的那几行**，WPF 于是只改这几行的容器；整体替换 ItemsSource 会让一屏容器全部重建。
+    /// 代价是 n² 次查找（n ≤ 40，每秒一次，可忽略）。</summary>
+    static void Reconcile<T>(ObservableCollection<T> live, List<T> desired) where T : class
+    {
+        var keep = new HashSet<T>(desired);
+        for (int i = live.Count - 1; i >= 0; i--)
+            if (!keep.Contains(live[i])) live.RemoveAt(i);
+        for (int i = 0; i < desired.Count; i++)
+        {
+            int cur = live.IndexOf(desired[i]);
+            if (cur < 0) live.Insert(i, desired[i]);
+            else if (cur != i) live.Move(cur, i);
+        }
+    }
 
     void SyncApps(List<AppInfo> procs)
     {
         _lastApps = procs;                       // 留着给"点表头改排序"时立刻重排
+        var seen = new HashSet<int>(procs.Count);
         var all = new List<AppRow>(procs.Count);
         foreach (var p in procs)
         {
-            string disp = string.IsNullOrEmpty(p.Display) ? p.Name : p.Display;
-            all.Add(new AppRow
+            seen.Add(p.Pid);
+            if (!_appPool.TryGetValue(p.Pid, out var row))
             {
-                Pid = p.Pid,
-                Name = disp,
-                Sub = string.IsNullOrEmpty(p.Title) ? p.Name : p.Title,
-                IconKey = IconRules.For((p.Name ?? "") + " " + (p.Display ?? "")),
-                Cpu = p.Cpu,
-                MemMb = p.MemMb,
-            });
+                row = new AppRow { Pid = p.Pid };
+                _appPool[p.Pid] = row;
+            }
+            row.Name = (string.IsNullOrEmpty(p.Display) ? p.Name : p.Display) ?? "";
+            row.Sub = (string.IsNullOrEmpty(p.Title) ? p.Name : p.Title) ?? "";
+            row.IconKey = IconRules.For((p.Name ?? "") + " " + (p.Display ?? ""));
+            row.Cpu = p.Cpu;
+            row.MemMb = p.MemMb;
+            all.Add(row);
         }
         // 采集端只发候选集（活跃度过滤 + 宽上限），排序与显示条数在这里定
         Func<AppRow, object> key = _appSort switch
@@ -458,30 +484,15 @@ public partial class PanelWindow : Window
         };
         var ordered = (_appSortDesc ? all.OrderByDescending(key) : all.OrderBy(key));
         var rows = ordered.Take(Math.Max(1, _appLimit)).ToList();
+        Reconcile(_appRows, rows);
+        // 已经退场的进程要从池子里清掉：池子是按 pid 记的，只进不出就成了一份只涨不落的名单
+        //（被条数上限截掉的那些留着，改条数/改排序时还能接着复用）
+        foreach (var pid in _appPool.Keys.Where(k => !seen.Contains(k)).ToList()) _appPool.Remove(pid);
 
         string arrow = _appSortDesc ? " ▾" : " ▴";
         headAppName.Text = "应用名称" + (_appSort == "Name" ? arrow : "");
         headAppCpu.Text = "CPU 占用" + (_appSort == "Cpu" ? arrow : "");
         headAppMem.Text = "内存占用" + (_appSort == "Mem" ? arrow : "");
-
-        string sig = string.Join(",", rows.Select(r => r.Pid));
-        if (sig != _appSig)
-        {
-            _appSig = sig;
-            _appRows = rows;
-            appList.ItemsSource = rows;
-        }
-        else
-        {
-            for (int i = 0; i < rows.Count && i < _appRows.Count; i++)
-            {
-                var a = _appRows[i];
-                a.Cpu = rows[i].Cpu;
-                a.MemMb = rows[i].MemMb;
-                a.Name = rows[i].Name;
-                a.Sub = rows[i].Sub;
-            }
-        }
         // 迷你条按全表最大值归一：条比数字更容易一眼比大小，所以每列各按自己的口径满格
         double maxCpu = _appRows.Count > 0 ? _appRows.Max(r => r.Cpu) : 0;
         double maxMem = _appRows.Count > 0 ? _appRows.Max(r => r.MemMb) : 0;
@@ -518,14 +529,17 @@ public partial class PanelWindow : Window
         Diag.Log($"面板：应用概况排序 → {key}{(_appSortDesc ? " 降序" : " 升序")}，前三：{string.Join(" | ", top)}");
     }
 
-    /* ---- 页3：应用内存（按应用名聚合，同名多进程合并成一行） ---- */
+    /* ---- 页3：应用内存（按应用名聚合，同名多进程合并成一行；排序由表头选） ---- */
 
     readonly Dictionary<string, AppMemRow> _appMem = new();
-    List<AppMemRow> _memRows = new();
-    string _memSig = "";
+    readonly ObservableCollection<AppMemRow> _memRows = new();
+    string _memSort = "Occ";            // Occ=已占用 / Commit=已提交 / Name=名称（点表头切换）
+    bool _memSortDesc = true;
+    MemSnapshot? _lastSnap;             // 留着给"点表头改排序"时立刻重排
 
     void SyncMem(MemSnapshot s)
     {
+        _lastSnap = s;
         double totalMb = s.TotalMb > 0 ? s.TotalMb : 32768;
         double limitMb = s.Mem.CommitLimitGb * 1024;
         if (limitMb <= 0) limitMb = totalMb;
@@ -557,16 +571,24 @@ public partial class PanelWindow : Window
             row.PctText = $"已占用 {row.MemPct:F1}% 物理内存 · 已提交 {row.CommitPct:F1}% 提交额度";
             list.Add(row);
         }
-        list.Sort((x, y) => y.MemMb.CompareTo(x.MemMb));
-        var shown = list.Take(Math.Max(1, _appLimit)).ToList();
+        // 已经退场的应用从池子里清掉（理由同应用概况：池子只进不出就成了只涨不落的名单）
+        foreach (var k in _appMem.Keys.Where(k => !agg.ContainsKey(k)).ToList()) _appMem.Remove(k);
 
-        string sig = string.Join(",", shown.Select(r => r.Key));
-        if (sig != _memSig)
+        Func<AppMemRow, object> key = _memSort switch
         {
-            _memSig = sig;
-            _memRows = shown;
-            memList.ItemsSource = shown;
-        }
+            "Name" => r => r.Name,
+            "Commit" => r => r.CommitMb,
+            _ => r => r.MemMb,
+        };
+        var ordered = _memSortDesc ? list.OrderByDescending(key) : list.OrderBy(key);
+        var shown = ordered.Take(Math.Max(1, _appLimit)).ToList();
+        Reconcile(_memRows, shown);
+
+        string arrow = _memSortDesc ? " ▾" : " ▴";
+        headMemName.Text = "应用" + (_memSort == "Name" ? arrow : "");
+        headMemOcc.Text = "已占用" + (_memSort == "Occ" ? arrow : "");
+        headMemCommit.Text = "已提交" + (_memSort == "Commit" ? arrow : "");
+
         foreach (var r in _memRows)
         {
             // 走势按绝对容量（GB）推点，与 AppMemRow 的 AxisUnit 一致：
@@ -574,6 +596,22 @@ public partial class PanelWindow : Window
             r.Push(r.MemMb / 1024, r.CommitMb / 1024);
             r.Notify();
         }
+    }
+
+    /* ---- 页3：应用内存的排序（点表头） ---- */
+
+    void MemSort_Name(object sender, MouseButtonEventArgs e) => SetMemSort("Name");
+    void MemSort_Occ(object sender, MouseButtonEventArgs e) => SetMemSort("Occ");
+    void MemSort_Commit(object sender, MouseButtonEventArgs e) => SetMemSort("Commit");
+
+    void SetMemSort(string key)
+    {
+        // 名称默认升序，数值默认降序；点同一列则反向（与应用概况同一套口径）
+        _memSortDesc = key == _memSort ? !_memSortDesc : key != "Name";
+        _memSort = key;
+        if (_lastSnap != null) SyncMem(_lastSnap);      // 立刻重排，不等下一次轮询
+        var top = _memRows.Take(3).Select(r => $"{r.Name}({r.MemVal}/{r.CommitVal})");
+        Diag.Log($"面板：应用内存排序 → {key}{(_memSortDesc ? " 降序" : " 升序")}，前三：{string.Join(" | ", top)}");
     }
 
     static string Gb(double mb) =>
