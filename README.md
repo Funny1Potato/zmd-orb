@@ -86,6 +86,12 @@ zmd-orb.exe --autostart on|off     改开机自启
 程序常驻**不需要管理员**；只有深度/全部整理时会弹一次 UAC。退出用右键菜单或面板上的「退出」。
 卸载用安装目录里的 `uninstall.exe`（或系统"应用和功能"）。
 
+## 设计参考与许可
+
+界面与部分功能设计参考了 [zmd-manager（终末地管理器）](https://github.com/QinAnze/zmd-manager)。
+
+本项目以 **MIT 许可**发布，见 [LICENSE](LICENSE)。
+
 ## 开发者
 
 架构、实测数据、视觉参数口径、踩过的坑都在 [DEVNOTES.md](DEVNOTES.md)。
