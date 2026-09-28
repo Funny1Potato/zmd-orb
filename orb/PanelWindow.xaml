@@ -1,6 +1,7 @@
 <Window x:Class="ZmdOrb.PanelWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:local="clr-namespace:ZmdOrb"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="终末地加速球 · 任务管理器"
@@ -10,90 +11,192 @@
         FontFamily="Microsoft YaHei, Segoe UI" FontWeight="Medium"
         TextOptions.TextFormattingMode="Ideal" UseLayoutRounding="True" SnapsToDevicePixels="True">
 
-  <!-- 界面照搬 zmd-manager（终末地管理器）的 index.html：浅暖灰底 + 灰色点阵纹理、深炭数据块、
-       亮黄主色，三个页面用顶栏中部的图标按钮切换。 -->
-  <Window.Background>
-    <DrawingBrush TileMode="Tile" Viewport="0,0,18,18" ViewportUnits="Absolute">
-      <DrawingBrush.Drawing>
-        <GeometryDrawing Brush="#bdbdb8">
-          <GeometryDrawing.Geometry>
-            <EllipseGeometry Center="2,2" RadiusX="1.3" RadiusY="1.3"/>
-          </GeometryDrawing.Geometry>
-        </GeometryDrawing>
-      </DrawingBrush.Drawing>
-    </DrawingBrush>
-  </Window.Background>
-
-  <shell:WindowChrome.WindowChrome>
-    <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6" CornerRadius="0"
-                        GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
-  </shell:WindowChrome.WindowChrome>
-
   <Window.Resources>
-    <!-- ============ 调色板（对应 index.html 的 CSS 变量） ============ -->
-    <SolidColorBrush x:Key="Bg" Color="#ececeb"/>
+
+    <!-- ==================================================================================
+         设计令牌：颜色
+         观感是"浅暖灰底 + 深炭块 + 亮黄主色"——底色一路偏暖（B 略低于 R/G），
+         深色块只在"读数"与"选中"上出现，亮黄面积始终很小（一亮一大片就没法看了）。
+         令牌层只登记"值"，控件样式只登记"谁用哪几个"，页面里不再出现十六进制：
+         调观感只改这一层，改完整个面板跟着走。
+         ================================================================================== -->
+
+    <!-- 面：窗口底 → 卡片 → 行，逐级抬亮（底最暗才衬得出点阵，行最亮才浮得起来） -->
+    <SolidColorBrush x:Key="Surface" Color="#ececeb"/>
     <SolidColorBrush x:Key="Panel" Color="#f6f6f4"/>
-    <SolidColorBrush x:Key="Panel2" Color="#ffffff"/>
-    <SolidColorBrush x:Key="Line" Color="#c9c9c4"/>
-    <SolidColorBrush x:Key="Dark" Color="#3a3a38"/>
-    <SolidColorBrush x:Key="Dark2" Color="#2c2c2a"/>
-    <SolidColorBrush x:Key="Yellow" Color="#ffdf00"/>
-    <SolidColorBrush x:Key="YellowBar" Color="#ded24e"/>
-    <SolidColorBrush x:Key="Blue" Color="#3ba3dc"/>
-    <SolidColorBrush x:Key="Orange" Color="#dfa32a"/>
-    <SolidColorBrush x:Key="Red" Color="#e04a3a"/>
+    <SolidColorBrush x:Key="SurfaceRaised" Color="#ffffff"/>
+    <SolidColorBrush x:Key="ControlFace" Color="#ececea"/>   <!-- 浅色按钮/页签底：比卡片深一档才像个可按的东西 -->
+    <SolidColorBrush x:Key="ControlRing" Color="#f7f7f4"/>   <!-- 圆按钮底：比上面再浅一档（圆的面积小，太深会"陷"进去） -->
+
+    <!-- 中灰填充（不带描边的"面"） -->
+    <SolidColorBrush x:Key="FillLabel" Color="#ddddd8"/>     <!-- 数据块标签底：衬右边的深炭数值 -->
+    <SolidColorBrush x:Key="FillTrack" Color="#e6e6e2"/>     <!-- 迷你条轨道 -->
+    <SolidColorBrush x:Key="FillChip" Color="#c9c9c4"/>      <!-- 监控目标小标签（与 Line 同值：这一档中灰既做描边也做小面积填充） -->
+    <SolidColorBrush x:Key="FillThumb" Color="#b8b8b2"/>     <!-- 滚动条滑块 -->
+
+    <!-- 线：同一支暖灰按"要压多重"分档 -->
+    <SolidColorBrush x:Key="Line" Color="#c9c9c4"/>          <!-- 1px 主描边（卡片/按钮/胶囊） -->
+    <SolidColorBrush x:Key="LineRow" Color="#e2e2de"/>       <!-- 列表行描边：行本身带投影，再压重色会脏 -->
+    <SolidColorBrush x:Key="LineRule" Color="#d5d5d0"/>      <!-- 虚线分隔（详情行/规格行） -->
+    <SolidColorBrush x:Key="LineHair" Color="#b5b5b0"/>      <!-- 列头下的虚线：比实线细看，得压得住 -->
+    <SolidColorBrush x:Key="LineRing" Color="#cfcfca"/>      <!-- 圆按钮描边 -->
+
+    <!-- 字：正文 → 次要 → 标题；数字与行名各占一档（数字要压得住底线，行名比正文略深才像"标题行"） -->
     <SolidColorBrush x:Key="Ink" Color="#4a4a46"/>
     <SolidColorBrush x:Key="InkDim" Color="#8a8a84"/>
+    <SolidColorBrush x:Key="InkTitle" Color="#4c4c48"/>
+    <SolidColorBrush x:Key="InkNum" Color="#3f3f3c"/>
+    <SolidColorBrush x:Key="InkRow" Color="#454540"/>
+    <SolidColorBrush x:Key="InkSoft" Color="#5a5a55"/>
+    <!-- 圆环中庭的三档字：一个数要一眼读出来，说明字只能退到背景里 -->
+    <SolidColorBrush x:Key="InkClock" Color="#575752"/>     <!-- 已运行时长 -->
+    <SolidColorBrush x:Key="InkGaugeSub" Color="#6a6a64"/>  <!-- 分母（/ 325799） -->
+    <SolidColorBrush x:Key="InkHint" Color="#7b7b74"/>      <!-- "已运行" 这类说明字 -->
 
-    <!-- 面板标题：17px + 3px 深炭下边线（.panel-title h2） -->
+    <!-- 深炭块与它上面的字（值越深越"重"，只用在读数底、徽标、选中态、主按钮上） -->
+    <SolidColorBrush x:Key="Plate" Color="#3a3a38"/>
+    <SolidColorBrush x:Key="PlateDeep" Color="#2c2c2a"/>
+    <SolidColorBrush x:Key="PlateLift" Color="#3f3f3c"/>     <!-- 深炭块的"悬停亮一档"（深炭里正好是数字灰） -->
+    <SolidColorBrush x:Key="PlateHover" Color="#4a4a46"/>    <!-- 主按钮悬停（与 Ink 同值：再亮一档就到了正文灰） -->
+    <SolidColorBrush x:Key="OnPlate" Color="#ffffff"/>
+
+    <!-- 图标灰：描边图标单走一档（同一片灰落在细线上会比落在字上显浅，共用文字灰会发飘） -->
+    <SolidColorBrush x:Key="IconIdle" Color="#75756f"/>
+    <SolidColorBrush x:Key="IconQuiet" Color="#9a9a94"/>
+    <SolidColorBrush x:Key="IconFaint" Color="#8d8d87"/>
+
+    <!-- 强调与状态 -->
+    <SolidColorBrush x:Key="Accent" Color="#ffdf00"/>        <!-- 主色：只用在提示、选中、开关上 -->
+    <SolidColorBrush x:Key="AccentSoft" Color="#ded24e"/>    <!-- 细线上的主色：亮黄铺在细条/细线上会刺眼，柔一档 -->
+    <SolidColorBrush x:Key="Cool" Color="#3ba3dc"/>          <!-- 次指标（CPU / 已提交） -->
+    <SolidColorBrush x:Key="Alert" Color="#e04a3a"/>         <!-- 警戒（提交额度、缺页率破线的底色） -->
+    <SolidColorBrush x:Key="Dot" Color="#bdbdb8"/>           <!-- 底纹点阵的点色 -->
+    <SolidColorBrush x:Key="StatusIdle" Color="#b9b9b3"/>     <!-- 数据源没连上（演示）的状态点；连上了在代码里换绿 -->
+    <SolidColorBrush x:Key="StripBack" Color="#d95a5a56"/>    <!-- 表头带：半透明深灰，白字白图标都读得出，底纹还能透一点 -->
+    <SolidColorBrush x:Key="OverlayBack" Color="#7322221F"/>  <!-- 详情覆盖页的遮罩 -->
+    <Color x:Key="ShadowColor">#000000</Color>
+
+    <!-- ==================================================================================
+         设计令牌：字号 / 圆角 / 内边距 / 列宽
+         字号只留这几档（面板里没有第五种正文大小）；一次性的尺寸（某个按钮自己的 padding、
+         某个图标的边长）写在它自己身上，别为了"整齐"也做成令牌。
+         ================================================================================== -->
+
+    <sys:Double x:Key="FsTiny">9</sys:Double>          <!-- 列头圆标里的字母 -->
+    <sys:Double x:Key="FsCaption">11</sys:Double>      <!-- 行的副标题（进程标题/线程数） -->
+    <sys:Double x:Key="FsSmall">12</sys:Double>        <!-- 单位、小标签、图例 -->
+    <sys:Double x:Key="FsBody">13</sys:Double>         <!-- 正文：标签、列头、底栏、当前数据 -->
+    <sys:Double x:Key="FsRowName">14</sys:Double>      <!-- 行主名 -->
+    <sys:Double x:Key="FsValue">15</sys:Double>        <!-- 行里的读数、顶栏徽标 -->
+    <sys:Double x:Key="FsTitle">16</sys:Double>        <!-- 小节标题 -->
+    <sys:Double x:Key="FsCta">18</sys:Double>          <!-- 刷新数据大按钮 -->
+    <sys:Double x:Key="FsMetric">22</sys:Double>       <!-- 数据块数值的默认档（首页两块自己放大到 24） -->
+    <sys:Double x:Key="FsHeadNum">24</sys:Double>
+    <sys:Double x:Key="FsGauge">52</sys:Double>        <!-- 圆环中间的大数 -->
+    <sys:Double x:Key="FsGaugeSub">20</sys:Double>     <!-- 分母：比大数小一半还多，才不会跟大数抢眼 -->
+    <sys:Double x:Key="FsClock">22</sys:Double>        <!-- 已运行时长 -->
+    <sys:Double x:Key="FsHint">13.5</sys:Double>       <!-- 说明小字（非整数：紧跟在中文字后面时要的是这个观感） -->
+
+    <CornerRadius x:Key="RadiusControl">8</CornerRadius>   <!-- 按钮 / 页签 / 开关胶囊 -->
+    <CornerRadius x:Key="RadiusStrip">6</CornerRadius>     <!-- 表头带：比按钮方一点，跟下面的直角行配套 -->
+    <CornerRadius x:Key="RadiusChip">14</CornerRadius>     <!-- 顶栏状态胶囊 -->
+    <CornerRadius x:Key="RadiusPill">20</CornerRadius>     <!-- 占用报告徽标 -->
+    <CornerRadius x:Key="RadiusCta">18</CornerRadius>      <!-- 刷新数据大按钮 -->
+    <CornerRadius x:Key="RadiusThumb">4</CornerRadius>     <!-- 滚动条滑块 -->
+
+    <Thickness x:Key="PadCard">18,16,18,18</Thickness>     <!-- 卡片 -->
+    <Thickness x:Key="PadRow">9,7</Thickness>              <!-- 列表行 -->
+    <Thickness x:Key="PadTitle">4,0,4,8</Thickness>        <!-- 小节标题：字到下边线的距离（线本身的 3px 是边框） -->
+    <Thickness x:Key="PadDataLbl">14,9</Thickness>         <!-- 数据块标签：纵向多让一点，两种字号在同一行里才视觉居中 -->
+    <Thickness x:Key="PadDataVal">16,7</Thickness>
+    <Thickness x:Key="PadChip">12,6</Thickness>
+    <Thickness x:Key="PadStrip">12,10</Thickness>
+
+    <!-- 列宽：表头与行模板共用同一组，改列宽只改这里（否则表头会跟行对不齐） -->
+    <GridLength x:Key="ColAppName">1*</GridLength>
+    <GridLength x:Key="ColAppCpu">120</GridLength>
+    <GridLength x:Key="ColAppMem">150</GridLength>
+    <GridLength x:Key="ColDevice">205</GridLength>
+    <GridLength x:Key="ColTrend">1*</GridLength>
+    <GridLength x:Key="ColCur">175</GridLength>
+    <GridLength x:Key="ColLast">175</GridLength>
+    <GridLength x:Key="ColDetailLbl">100</GridLength>
+
+    <!-- 深色块右下角的斜切：拿一块"与它底下那层同色"的三角盖掉右下角。
+         块大切口就大（8px 徽标 / 7px 列表图标），不然切角在 38px 的块上看不出来 -->
+    <PathGeometry x:Key="CutCorner8" Figures="M0,0 L8,0 L8,8 Z"/>
+    <PathGeometry x:Key="CutCorner7" Figures="M0,0 L7,0 L7,7 Z"/>
+
+    <!-- 投影：按"浮起几层"各一支（顶栏压住页面 / 行浮在卡片上 / 读数块浮在圆环上 / 详情卡浮在遮罩上） -->
+    <DropShadowEffect x:Key="ShadowBar" BlurRadius="10" ShadowDepth="2" Direction="270" Opacity="0.10"
+                      Color="{StaticResource ShadowColor}"/>
+    <DropShadowEffect x:Key="ShadowRow" BlurRadius="6" ShadowDepth="1" Direction="270" Opacity="0.12"
+                      Color="{StaticResource ShadowColor}"/>
+    <DropShadowEffect x:Key="ShadowBox" BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"
+                      Color="{StaticResource ShadowColor}"/>
+    <DropShadowEffect x:Key="ShadowCard" BlurRadius="44" ShadowDepth="0" Opacity="0.32"
+                      Color="{StaticResource ShadowColor}"/>
+
+    <!-- ==================================================================================
+         组件样式
+         ================================================================================== -->
+
+    <!-- 小节标题：字 + 一条 3px 深炭下边线。这条线是整页里最重的一条，
+         所以标题字用深一档的 InkTitle 配它，不然标题会被自己的下边线压住。 -->
     <Style x:Key="SecTitleBox" TargetType="Border">
-      <Setter Property="BorderBrush" Value="{StaticResource Dark}"/>
+      <Setter Property="BorderBrush" Value="{StaticResource Plate}"/>
       <Setter Property="BorderThickness" Value="0,0,0,3"/>
-      <Setter Property="Padding" Value="4,0,4,8"/>
+      <Setter Property="Padding" Value="{StaticResource PadTitle}"/>
       <Setter Property="HorizontalAlignment" Value="Left"/>
       <Setter Property="Margin" Value="0,0,0,10"/>
     </Style>
     <Style x:Key="SecTitle" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="16"/>
-      <Setter Property="Foreground" Value="#4c4c48"/>
+      <Setter Property="FontSize" Value="{StaticResource FsTitle}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkTitle}"/>
     </Style>
 
-    <!-- 数据块：左浅灰标签 + 右深炭数值（.data-box） -->
+    <!-- 数据块：左浅灰标签 + 右深炭数值（首页两个绝对值、整理页八张读数卡共用）。
+         数值用等宽数字（Tabular），不然每刷新一次数字宽窄就跳一下，整块在抖。 -->
     <Style x:Key="MetricLbl" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
-      <Setter Property="Background" Value="#ddddd8"/>
-      <Setter Property="Padding" Value="14,9"/>
+      <Setter Property="Background" Value="{StaticResource FillLabel}"/>
+      <Setter Property="Padding" Value="{StaticResource PadDataLbl}"/>
     </Style>
     <Style x:Key="MetricVal" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="22"/>
-      <Setter Property="Foreground" Value="#ffffff"/>
+      <Setter Property="FontSize" Value="{StaticResource FsMetric}"/>
+      <Setter Property="Foreground" Value="{StaticResource OnPlate}"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
-      <Setter Property="Background" Value="{StaticResource Dark}"/>
-      <Setter Property="Padding" Value="16,7"/>
+      <Setter Property="Background" Value="{StaticResource Plate}"/>
+      <Setter Property="Padding" Value="{StaticResource PadDataVal}"/>
       <Setter Property="MinWidth" Value="104"/>
       <Setter Property="TextAlignment" Value="Center"/>
       <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
     </Style>
 
-    <!-- 深炭主按钮 -->
+    <!-- 数据块外框：一支柔和投影把读数从圆环上抬起来（投影只加在框上，块内不分层） -->
+    <Style x:Key="DataBox" TargetType="Border">
+      <Setter Property="Effect" Value="{StaticResource ShadowBox}"/>
+    </Style>
+
+    <!-- 主按钮（深炭）：按下时不换色只压暗，省得跟"禁用"混在一起 -->
     <Style x:Key="ActBtn" TargetType="Button">
       <Setter Property="Height" Value="34"/>
       <Setter Property="Padding" Value="16,0"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="Foreground" Value="#ffffff"/>
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
+      <Setter Property="Foreground" Value="{StaticResource OnPlate}"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bg" Background="{StaticResource Dark2}" CornerRadius="8"
-                    Padding="{TemplateBinding Padding}">
+            <Border x:Name="bg" Background="{StaticResource PlateDeep}"
+                    CornerRadius="{StaticResource RadiusControl}" Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Background" Value="#4a4a46"/>
+                <Setter TargetName="bg" Property="Background" Value="{StaticResource PlateHover}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bg" Property="Opacity" Value="0.45"/>
@@ -104,23 +207,24 @@
       </Setter>
     </Style>
 
-    <!-- 浅色次按钮 -->
+    <!-- 次按钮（浅色）：悬停抬到白色，别用"变深"——浅底上变深像是被禁用 -->
     <Style x:Key="GhostBtn" TargetType="Button">
       <Setter Property="Height" Value="34"/>
       <Setter Property="Padding" Value="14,0"/>
-      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bg" Background="#ececea" BorderBrush="{StaticResource Line}"
-                    BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
+            <Border x:Name="bg" Background="{StaticResource ControlFace}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="{StaticResource RadiusControl}" Padding="{TemplateBinding Padding}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Background" Value="#ffffff"/>
+                <Setter TargetName="bg" Property="Background" Value="{StaticResource SurfaceRaised}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter TargetName="bg" Property="Opacity" Value="0.45"/>
@@ -131,23 +235,24 @@
       </Setter>
     </Style>
 
-    <!-- 圆形关闭按钮（.close-btn） -->
-    <Style x:Key="RoundBtn" TargetType="Button">
+    <!-- 圆按钮（收起 / 关详情）：圆底 + 一圈浅描边，悬停只提亮不放大（这里离顶栏边太近，放大要蹭到） -->
+    <Style x:Key="CircleButton" TargetType="Button">
       <Setter Property="Width" Value="34"/>
       <Setter Property="Height" Value="34"/>
-      <Setter Property="Foreground" Value="#85858a"/>
+      <Setter Property="Foreground" Value="{StaticResource IconQuiet}"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Grid>
-              <Ellipse x:Name="bg" Fill="#f7f7f4" Stroke="#cfcfca" StrokeThickness="1"/>
+              <Ellipse x:Name="bg" Fill="{StaticResource ControlRing}"
+                       Stroke="{StaticResource LineRing}" StrokeThickness="1"/>
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Grid>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Fill" Value="#ffffff"/>
-                <Setter Property="Foreground" Value="#4a4a46"/>
+                <Setter TargetName="bg" Property="Fill" Value="{StaticResource SurfaceRaised}"/>
+                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -155,25 +260,27 @@
       </Setter>
     </Style>
 
-    <!-- 顶栏图标标签（.tab-ic）：38×38，选中 = 深底黄字 -->
-    <Style x:Key="NavTab" TargetType="Button">
+    <!-- 顶栏页签（38×38 图标钮）：选中 = 深炭底 + 亮黄图标。
+         选中态不做"只改边框色"那种轻提示——顶栏图标本来就小，浅底上换个边框色认不出来。 -->
+    <Style x:Key="TabButton" TargetType="Button">
       <Setter Property="Width" Value="38"/>
       <Setter Property="Height" Value="38"/>
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border x:Name="bg" Background="#ececea" BorderBrush="{StaticResource Line}"
-                    BorderThickness="1" CornerRadius="8">
+            <Border x:Name="bg" Background="{StaticResource ControlFace}"
+                    BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    CornerRadius="{StaticResource RadiusControl}">
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="bg" Property="Background" Value="#ffffff"/>
+                <Setter TargetName="bg" Property="Background" Value="{StaticResource SurfaceRaised}"/>
               </Trigger>
               <Trigger Property="Tag" Value="active">
-                <Setter TargetName="bg" Property="Background" Value="{StaticResource Dark}"/>
-                <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource Dark}"/>
+                <Setter TargetName="bg" Property="Background" Value="{StaticResource Plate}"/>
+                <Setter TargetName="bg" Property="BorderBrush" Value="{StaticResource Plate}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -181,32 +288,54 @@
       </Setter>
     </Style>
 
-    <!-- 表头单元（.col-head .h）：深底黄字小圆标 + 文字 -->
-    <Style x:Key="ColHead" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="13"/>
+    <!-- 表头带：设备页与应用内存页共用一条（两组列完全同宽，表头也就同一条）。
+         半透明的深灰压在点阵上，白字读得出、底纹也没被糊死。 -->
+    <Style x:Key="StripHead" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource StripBack}"/>
+      <Setter Property="CornerRadius" Value="{StaticResource RadiusStrip}"/>
+      <Setter Property="Padding" Value="{StaticResource PadStrip}"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <Style x:Key="StripText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
+      <Setter Property="Foreground" Value="{StaticResource OnPlate}"/>
+      <Setter Property="Margin" Value="8,0,0,0"/>
+    </Style>
+
+    <!-- 列头：深炭圆标（字母）+ 标题。后两列靠右，跟下面的数值对齐 -->
+    <Style x:Key="ColTitle" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
-    <Style x:Key="ColHeadMark" TargetType="Border">
+    <Style x:Key="ColBadge" TargetType="Border">
       <Setter Property="Width" Value="16"/>
       <Setter Property="Height" Value="16"/>
       <Setter Property="CornerRadius" Value="8"/>
-      <Setter Property="Background" Value="{StaticResource Dark}"/>
+      <Setter Property="Background" Value="{StaticResource Plate}"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="ColBadgeText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsTiny}"/>
+      <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+      <Setter Property="HorizontalAlignment" Value="Center"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
-    <!-- 列表行：白条块 + 细边框 + 柔和投影 + 悬停右移 3px（.app-row） -->
-    <Style x:Key="RowItem" TargetType="ListBoxItem">
+    <!-- 列表行（应用概况 / 设备 / 应用内存共用）：白条 + 细边 + 一层浅投影；
+         悬停整行右移 3px —— 手指还没点下去就知道"这一行是活的"。 -->
+    <Style x:Key="DataRow" TargetType="ListBoxItem">
       <Setter Property="Padding" Value="0"/>
       <Setter Property="Margin" Value="0,0,0,7"/>
       <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="ListBoxItem">
-            <Border x:Name="bg" Background="{StaticResource Panel2}" BorderBrush="#e2e2de"
-                    BorderThickness="1" Padding="9,7">
+            <Border x:Name="bg" Background="{StaticResource SurfaceRaised}"
+                    BorderBrush="{StaticResource LineRow}" BorderThickness="1"
+                    Padding="{StaticResource PadRow}">
               <Border.Effect>
-                <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Opacity="0.12" Color="#000000"/>
+                <StaticResource ResourceKey="ShadowRow"/>
               </Border.Effect>
               <ContentPresenter/>
             </Border>
@@ -220,25 +349,124 @@
       </Setter>
     </Style>
 
-    <!-- 小输入框（显示设置用） -->
+    <!-- 行首图标块：深炭方 + 右下斜切 + 居中白色描边图标（应用概况与应用内存的行共用）。
+         图标键由行对象给（绑定 IconKey），所以这里用 ContentControl 挂模板。 -->
+    <Style x:Key="RowIconTile" TargetType="ContentControl">
+      <Setter Property="Width" Value="38"/>
+      <Setter Property="Height" Value="38"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ContentControl">
+            <Grid>
+              <Border Background="{StaticResource PlateDeep}"/>
+              <Path Fill="{StaticResource SurfaceRaised}" Data="{StaticResource CutCorner7}"
+                    Width="7" Height="7" HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+              <local:IconView Key="{Binding IconKey}" Width="20" Height="20" StrokeThickness="1.8"
+                              Stroke="{StaticResource OnPlate}"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- 行的主名 / 副标题：一律单行省略（进程标题能很长，撑破列比截断难看） -->
+    <Style x:Key="RowName" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsRowName}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkRow}"/>
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    </Style>
+    <Style x:Key="RowSub" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsCaption}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkDim}"/>
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    </Style>
+
+    <!-- 指标读数（行里那个数）：等宽数字，刷新时不抖 -->
+    <Style x:Key="RowValue" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsValue}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkNum}"/>
+      <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
+    </Style>
+
+    <!-- 迷你条：轨道 + 填充条。轨道的宽度是"这条能有多长"的唯一口径，
+         代码里按它归一（PanelWindow.MiniTrackWidth 必须与这里一致）。 -->
+    <Style x:Key="MiniTrack" TargetType="Grid">
+      <Setter Property="HorizontalAlignment" Value="Right"/>
+      <Setter Property="Width" Value="86"/>
+      <Setter Property="Height" Value="3"/>
+      <Setter Property="Margin" Value="0,4,0,0"/>
+    </Style>
+    <Style x:Key="MiniBar" TargetType="Rectangle">
+      <Setter Property="Fill" Value="{StaticResource AccentSoft}"/>
+      <Setter Property="HorizontalAlignment" Value="Left"/>
+    </Style>
+
+    <!-- 走势图：66 高的一条深灰带，横向留出与"设备信息/当前数据"两列的呼吸（左右不等，左边要贴图标列）
+         图本身由 SparkVisual 直绘，这里只管占位 -->
+    <Style x:Key="TrendPlot" TargetType="local:SparkVisual">
+      <Setter Property="Height" Value="66"/>
+      <Setter Property="Margin" Value="10,0,14,0"/>
+    </Style>
+
+    <!-- 走势图与当前数据是同一个指标的两处呈现：点色=线色。这个点就是它们的"对号" -->
+    <Style x:Key="SeriesDot" TargetType="Ellipse">
+      <Setter Property="Width" Value="7"/>
+      <Setter Property="Height" Value="7"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- 当前数据两行：标签与值。标签给个最小宽（两行标签长短不一，不给就左右参差） -->
+    <Style x:Key="CurLbl" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkSoft}"/>
+      <Setter Property="Margin" Value="6,0,0,0"/>
+      <Setter Property="MinWidth" Value="34"/>
+    </Style>
+    <Style x:Key="CurVal" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsValue}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkNum}"/>
+      <Setter Property="Margin" Value="8,0,0,0"/>
+    </Style>
+
+    <!-- 监控目标小标签：中灰底 + 直角（圆角会跟旁边的按钮混成一家） -->
+    <Style x:Key="TagPlate" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource FillChip}"/>
+      <Setter Property="Padding" Value="14,4"/>
+    </Style>
+    <Style x:Key="TagText" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsSmall}"/>
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+    </Style>
+
+    <!-- 底栏那两行的圆点：空心小圈，跟左边的文字同灰 -->
+    <Style x:Key="RingDot" TargetType="Ellipse">
+      <Setter Property="Width" Value="7"/>
+      <Setter Property="Height" Value="7"/>
+      <Setter Property="Stroke" Value="{StaticResource InkDim}"/>
+      <Setter Property="StrokeThickness" Value="2"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- 小输入框（显示设置用）：等宽数字，多位数值不会边输边跳 -->
     <Style x:Key="MiniBox" TargetType="TextBox">
       <Setter Property="Height" Value="24"/>
       <Setter Property="Width" Value="58"/>
-      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontSize" Value="{StaticResource FsSmall}"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="Padding" Value="6,0"/>
-      <Setter Property="Background" Value="#ffffff"/>
+      <Setter Property="Background" Value="{StaticResource SurfaceRaised}"/>
       <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
       <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
     </Style>
     <Style x:Key="MiniLbl" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="FontSize" Value="{StaticResource FsSmall}"/>
       <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
       <Setter Property="Margin" Value="10,0,5,0"/>
     </Style>
 
-    <!-- 细滚动条（::-webkit-scrollbar 8px） -->
+    <!-- 细滚动条：宽 8px、滑块 4px 圆角，收起上下箭头（列表里箭头一直在闪很难看） -->
     <Style x:Key="SlimScroll" TargetType="ScrollBar">
       <Setter Property="Width" Value="8"/>
       <Setter Property="Background" Value="Transparent"/>
@@ -251,7 +479,8 @@
                   <Thumb>
                     <Thumb.Template>
                       <ControlTemplate TargetType="Thumb">
-                        <Border Background="#b8b8b2" CornerRadius="4"/>
+                        <Border Background="{StaticResource FillThumb}"
+                                CornerRadius="{StaticResource RadiusThumb}"/>
                       </ControlTemplate>
                     </Thumb.Template>
                   </Thumb>
@@ -268,10 +497,48 @@
         </Setter.Value>
       </Setter>
     </Style>
+
+    <!-- 详情表的一行：左标签（灰）+ 右值（深）+ 行底一条虚线。
+         行由代码按数据拼（条目数不固定），样式留在这里，代码就不必写颜色与尺寸。 -->
+    <Style x:Key="DetailRow" TargetType="Border">
+      <Setter Property="BorderBrush" Value="{StaticResource LineRule}"/>
+      <Setter Property="BorderThickness" Value="0,0,0,1"/>
+      <Setter Property="Padding" Value="0,7"/>
+      <Setter Property="Margin" Value="0,2"/>
+    </Style>
+    <Style x:Key="DetailLbl" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkDim}"/>
+    </Style>
+    <Style x:Key="DetailVal" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{StaticResource FsBody}"/>
+      <Setter Property="Foreground" Value="{StaticResource InkNum}"/>
+      <Setter Property="TextAlignment" Value="Right"/>
+      <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+    </Style>
   </Window.Resources>
 
+  <!-- 底：浅暖灰 + 一层灰点阵（18px 一格、半径 1.3）。点阵是"纸"的质感，
+       密度再高就像噪点，间距再大就成格子布了。 -->
+  <Window.Background>
+    <DrawingBrush TileMode="Tile" Viewport="0,0,18,18" ViewportUnits="Absolute">
+      <DrawingBrush.Drawing>
+        <GeometryDrawing Brush="{StaticResource Dot}">
+          <GeometryDrawing.Geometry>
+            <EllipseGeometry Center="2,2" RadiusX="1.3" RadiusY="1.3"/>
+          </GeometryDrawing.Geometry>
+        </GeometryDrawing>
+      </DrawingBrush.Drawing>
+    </DrawingBrush>
+  </Window.Background>
+
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="46" ResizeBorderThickness="6" CornerRadius="0"
+                        GlassFrameThickness="0" UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+
   <Border BorderBrush="{StaticResource Line}" BorderThickness="1">
-    <Grid Background="{StaticResource Bg}">
+    <Grid Background="{StaticResource Surface}">
       <Grid.RowDefinitions>
         <RowDefinition Height="46"/>
         <RowDefinition Height="*"/>
@@ -281,49 +548,56 @@
       <Border Grid.Row="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
               BorderThickness="0,0,0,1">
         <Border.Effect>
-          <DropShadowEffect BlurRadius="10" ShadowDepth="2" Direction="270" Opacity="0.10" Color="#000000"/>
+          <StaticResource ResourceKey="ShadowBar"/>
         </Border.Effect>
         <Grid Margin="18,0,12,0">
-          <!-- 深色徽标 + 右下角斜切（.logo-badge） -->
+          <!-- 应用徽标：深炭块 + 右下 8px 斜切，`//` 用主色（一个标点就能认出是哪个程序） -->
           <Grid HorizontalAlignment="Left" VerticalAlignment="Center">
-            <Border Background="{StaticResource Dark}" Padding="12,0" Height="34">
-              <TextBlock VerticalAlignment="Center" FontSize="15" Foreground="#ffffff">
-                <Run Foreground="{StaticResource Yellow}" Text="//"/><Run Text=" 终末地加速球"/>
+            <Border Background="{StaticResource Plate}" Padding="12,0" Height="34">
+              <TextBlock VerticalAlignment="Center" FontSize="{StaticResource FsValue}"
+                         Foreground="{StaticResource OnPlate}">
+                <Run Foreground="{StaticResource Accent}" Text="//"/><Run Text=" 终末地加速球"/>
               </TextBlock>
             </Border>
-            <Path Fill="{StaticResource Panel}" Data="M0,0 L8,0 L8,8 Z" Width="8" Height="8"
+            <Path Fill="{StaticResource Panel}" Data="{StaticResource CutCorner8}" Width="8" Height="8"
                   HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
           </Grid>
 
-          <!-- 中部：三页切换（.nav-tabs） -->
+          <!-- 中部：四页切换。放在正中间（左右两侧的宽度都不固定，靠中点才稳） -->
           <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center"
                       shell:WindowChrome.IsHitTestVisibleInChrome="True">
-            <Button x:Name="tabOverview" Style="{StaticResource NavTab}" Tag="active" Click="Tab_Click"
+            <Button x:Name="tabOverview" Style="{StaticResource TabButton}" Tag="active" Click="Tab_Click"
                     ToolTip="综合占用">
-              <local:IconView Key="gauge" Width="19" Height="19" StrokeThickness="2" Stroke="#ffdf00" x:Name="ic1"/>
+              <local:IconView Key="gauge" Width="19" Height="19" StrokeThickness="2"
+                              Stroke="{StaticResource Accent}" x:Name="ic1"/>
             </Button>
-            <Button x:Name="tabPerf" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+            <Button x:Name="tabPerf" Style="{StaticResource TabButton}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="设备性能">
-              <local:IconView Key="mem" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic2"/>
+              <local:IconView Key="mem" Width="19" Height="19" StrokeThickness="2"
+                              Stroke="{StaticResource IconIdle}" x:Name="ic2"/>
             </Button>
-            <Button x:Name="tabMem" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+            <Button x:Name="tabMem" Style="{StaticResource TabButton}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="应用内存">
-              <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic3"/>
+              <local:IconView Key="activity" Width="19" Height="19" StrokeThickness="2"
+                              Stroke="{StaticResource IconIdle}" x:Name="ic3"/>
             </Button>
-            <Button x:Name="tabOrb" Style="{StaticResource NavTab}" Margin="8,0,0,0" Click="Tab_Click"
+            <Button x:Name="tabOrb" Style="{StaticResource TabButton}" Margin="8,0,0,0" Click="Tab_Click"
                     ToolTip="整理与系统信息">
-              <local:IconView Key="grid" Width="19" Height="19" StrokeThickness="2" Stroke="#75756f" x:Name="ic4"/>
+              <local:IconView Key="grid" Width="19" Height="19" StrokeThickness="2"
+                              Stroke="{StaticResource IconIdle}" x:Name="ic4"/>
             </Button>
           </StackPanel>
 
-          <!-- 数据源状态胶囊（.src-chip） -->
-          <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="#ffe" Margin="0,0,300,0"/>
-          <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="#ffffff"
-                  BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="14"
-                  Padding="12,6" Margin="0,0,240,0">
+          <!-- 数据源状态胶囊：实时（绿）/ 演示（灰），一眼看出采集端连没连上 -->
+          <Border HorizontalAlignment="Right" VerticalAlignment="Center"
+                  Background="{StaticResource SurfaceRaised}" BorderBrush="{StaticResource Line}"
+                  BorderThickness="1" CornerRadius="{StaticResource RadiusChip}"
+                  Padding="{StaticResource PadChip}" Margin="0,0,240,0">
             <StackPanel Orientation="Horizontal">
-              <Ellipse x:Name="srcDot" Width="8" Height="8" Fill="#b9b9b3" VerticalAlignment="Center"/>
-              <TextBlock x:Name="srcText" Text="演示" FontSize="12" Foreground="{StaticResource InkDim}"
+              <Ellipse x:Name="srcDot" Width="8" Height="8" Fill="{StaticResource StatusIdle}"
+                       VerticalAlignment="Center"/>
+              <TextBlock x:Name="srcText" Text="演示" FontSize="{StaticResource FsSmall}"
+                         Foreground="{StaticResource InkDim}"
                          Margin="7,0,0,0" VerticalAlignment="Center"/>
             </StackPanel>
           </Border>
@@ -332,7 +606,7 @@
                       shell:WindowChrome.IsHitTestVisibleInChrome="True">
             <Button x:Name="QuitBtn" Content="关闭程序" Style="{StaticResource GhostBtn}" Height="30"
                     Padding="12,0" Click="Quit_Click"/>
-            <Button x:Name="ToBall" Content="✕" Style="{StaticResource RoundBtn}" Margin="10,0,0,0"
+            <Button x:Name="ToBall" Content="✕" Style="{StaticResource CircleButton}" Margin="10,0,0,0"
                     Click="ToBall_Click" ToolTip="收起到球（不退出程序）"/>
           </StackPanel>
         </Grid>
@@ -355,7 +629,7 @@
               <ColumnDefinition Width="560"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 圆环总成（470×470，居中偏上） -->
+            <!-- 圆环总成：470 的圆环 + 290 的粒子团（粒子团比内盘小一圈，四周才有一圈暗边托住它） -->
             <Grid Grid.Column="0" Height="520">
               <Grid Width="470" Height="470" HorizontalAlignment="Center" VerticalAlignment="Top"
                     Margin="0,22,0,0">
@@ -364,111 +638,114 @@
                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
               </Grid>
 
-              <!-- 中央信息 -->
+              <!-- 圆环中间的读数：占用报告开关 / 综合占用 / 已运行 -->
               <StackPanel Width="240" HorizontalAlignment="Center" VerticalAlignment="Center"
                           Margin="0,-8,0,0">
-                <Border x:Name="reportBadge" HorizontalAlignment="Center" Background="{StaticResource Dark}"
-                        CornerRadius="20" Padding="12,5" Cursor="Hand" MouseLeftButtonUp="Report_Click">
+                <Border x:Name="reportBadge" HorizontalAlignment="Center" Background="{StaticResource Plate}"
+                        CornerRadius="{StaticResource RadiusPill}" Padding="12,5" Cursor="Hand"
+                        MouseLeftButtonUp="Report_Click">
                   <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="reportText" Text="占用报告" FontSize="12" Foreground="#ffffff"
-                               VerticalAlignment="Center"/>
-                    <Border x:Name="reportTogglePill" Width="22" Height="12" CornerRadius="8"
-                            Background="{StaticResource Yellow}" Margin="8,0,0,0" VerticalAlignment="Center">
-                      <Ellipse x:Name="reportToggleDot" Width="8" Height="8" Fill="{StaticResource Dark}"
+                    <TextBlock x:Name="reportText" Text="占用报告" FontSize="{StaticResource FsSmall}"
+                               Foreground="{StaticResource OnPlate}" VerticalAlignment="Center"/>
+                    <!-- 开关：胶囊底 + 会挪位置的点（位置由代码在开/关之间摆） -->
+                    <Border x:Name="reportTogglePill" Width="22" Height="12"
+                            CornerRadius="{StaticResource RadiusControl}"
+                            Background="{StaticResource Accent}" Margin="8,0,0,0" VerticalAlignment="Center">
+                      <Ellipse x:Name="reportToggleDot" Width="8" Height="8" Fill="{StaticResource Plate}"
                                HorizontalAlignment="Right" Margin="0,0,2,0"/>
                     </Border>
                   </StackPanel>
                 </Border>
-                <TextBlock x:Name="bigNum" Text="0" FontSize="52" Foreground="#3f3f3c" Margin="0,6,0,0"
+                <TextBlock x:Name="bigNum" Text="0" FontSize="{StaticResource FsGauge}"
+                           Foreground="{StaticResource InkNum}" Margin="0,6,0,0"
                            HorizontalAlignment="Center" Typography.NumeralAlignment="Tabular"/>
-                <TextBlock x:Name="ofMax" Text="/ —" FontSize="20" Foreground="#6a6a64"
+                <TextBlock x:Name="ofMax" Text="/ —" FontSize="{StaticResource FsGaugeSub}"
+                           Foreground="{StaticResource InkGaugeSub}"
                            HorizontalAlignment="Center" Typography.NumeralAlignment="Tabular"/>
-                <TextBlock x:Name="uptime" Text="00:00:00" FontSize="22" Foreground="#575752"
+                <TextBlock x:Name="uptime" Text="00:00:00" FontSize="{StaticResource FsClock}"
+                           Foreground="{StaticResource InkClock}"
                            Margin="0,12,0,0" HorizontalAlignment="Center"
                            Typography.NumeralAlignment="Tabular"/>
-                <TextBlock Text="已运行" FontSize="13.5" Foreground="#7b7b74"
+                <TextBlock Text="已运行" FontSize="{StaticResource FsHint}" Foreground="{StaticResource InkHint}"
                            HorizontalAlignment="Center" Margin="0,3,0,0"/>
               </StackPanel>
 
-              <!-- 已占用内存（右上，物理内存口径）/ 已提交（左下，提交额度口径）：.data-box -->
-              <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,15,12,0">
-                <Border.Effect>
-                  <DropShadowEffect BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"/>
-                </Border.Effect>
+              <!-- 两个绝对值块：右上=已占用内存（物理内存口径）、左下=已提交（提交额度口径）。
+                   两块贴在圆环两端弧头的高度上（上与 12 点弧端齐、下与 6 点弧端齐），
+                   看着像从弧头牵出来的标注。 -->
+              <Border Style="{StaticResource DataBox}" HorizontalAlignment="Right"
+                      VerticalAlignment="Top" Margin="0,15,12,0">
                 <StackPanel Orientation="Horizontal">
-                  <TextBlock Style="{StaticResource MetricVal}" FontSize="24"><Run x:Name="usedNum" Text="0"/><Run Text=" GB" FontSize="13"/></TextBlock>
+                  <TextBlock Style="{StaticResource MetricVal}" FontSize="{StaticResource FsHeadNum}"><Run x:Name="usedNum" Text="0"/><Run Text=" GB" FontSize="13"/></TextBlock>
                   <TextBlock Text="已占用内存" Style="{StaticResource MetricLbl}"/>
                 </StackPanel>
               </Border>
-              <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="12,0,0,56">
-                <Border.Effect>
-                  <DropShadowEffect BlurRadius="6" ShadowDepth="3" Direction="270" Opacity="0.22"/>
-                </Border.Effect>
+              <Border Style="{StaticResource DataBox}" HorizontalAlignment="Left"
+                      VerticalAlignment="Bottom" Margin="12,0,0,56">
                 <StackPanel Orientation="Horizontal">
                   <TextBlock Text="已提交" Style="{StaticResource MetricLbl}"/>
-                  <TextBlock Style="{StaticResource MetricVal}" FontSize="24"><Run x:Name="committedNum" Text="—"/><Run Text=" GB" FontSize="13"/></TextBlock>
+                  <TextBlock Style="{StaticResource MetricVal}" FontSize="{StaticResource FsHeadNum}"><Run x:Name="committedNum" Text="—"/><Run Text=" GB" FontSize="13"/></TextBlock>
                 </StackPanel>
               </Border>
             </Grid>
 
-            <!-- 应用概况（.apps-panel） -->
+            <!-- 应用概况：标题 + 可排序的列头 + 行列表（面板里唯一一列可点表头排序的） -->
             <Border x:Name="appsPanel" Grid.Column="2" Background="{StaticResource Panel}"
-                    BorderBrush="{StaticResource Line}" BorderThickness="1" Padding="18,16,18,18">
+                    BorderBrush="{StaticResource Line}" BorderThickness="1"
+                    Padding="{StaticResource PadCard}">
               <Grid>
                 <Grid.RowDefinitions>
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="Auto"/>
                   <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <!-- 标题 -->
                 <Grid Grid.Row="0">
                   <Border Style="{StaticResource SecTitleBox}">
                     <TextBlock Text="应用概况" Style="{StaticResource SecTitle}"/>
                   </Border>
-                  <local:IconView Key="more" Width="18" Height="18" StrokeThickness="2" Stroke="#9a9a94"
+                  <local:IconView Key="more" Width="18" Height="18" StrokeThickness="2"
+                                  Stroke="{StaticResource IconQuiet}"
                                   HorizontalAlignment="Right" VerticalAlignment="Center"/>
                 </Grid>
-                <!-- 列头（.col-head） -->
+                <!-- 列头：圆标里的字母是这一列的缩写（A=应用名 / C=CPU / M=内存），
+                     点整列标题即按这列排序（箭头由代码追加在标题后） -->
                 <Grid Grid.Row="1" Margin="6,4,6,0" Height="34">
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="120"/>
-                    <ColumnDefinition Width="150"/>
+                    <ColumnDefinition Width="{StaticResource ColAppName}"/>
+                    <ColumnDefinition Width="{StaticResource ColAppCpu}"/>
+                    <ColumnDefinition Width="{StaticResource ColAppMem}"/>
                   </Grid.ColumnDefinitions>
                   <StackPanel Grid.Column="0" Orientation="Horizontal">
-                    <Border Style="{StaticResource ColHeadMark}">
-                      <TextBlock Text="A" FontSize="9" Foreground="{StaticResource Yellow}"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border Style="{StaticResource ColBadge}">
+                      <TextBlock Text="A" Style="{StaticResource ColBadgeText}"/>
                     </Border>
-                    <TextBlock x:Name="headAppName" Text="应用名称" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                    <TextBlock x:Name="headAppName" Text="应用名称" Style="{StaticResource ColTitle}" Margin="7,0,0,0"
                                Cursor="Hand" ToolTip="点一下按名称排序"
                                MouseLeftButtonUp="AppSort_Name"/>
                   </StackPanel>
                   <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Border Style="{StaticResource ColHeadMark}">
-                      <TextBlock Text="C" FontSize="9" Foreground="{StaticResource Yellow}"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border Style="{StaticResource ColBadge}">
+                      <TextBlock Text="C" Style="{StaticResource ColBadgeText}"/>
                     </Border>
-                    <TextBlock x:Name="headAppCpu" Text="CPU 占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                    <TextBlock x:Name="headAppCpu" Text="CPU 占用" Style="{StaticResource ColTitle}" Margin="7,0,0,0"
                                Cursor="Hand" ToolTip="点一下按 CPU 排序"
                                MouseLeftButtonUp="AppSort_Cpu"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Border Style="{StaticResource ColHeadMark}">
-                      <TextBlock Text="M" FontSize="9" Foreground="{StaticResource Yellow}"
-                                 HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border Style="{StaticResource ColBadge}">
+                      <TextBlock Text="M" Style="{StaticResource ColBadgeText}"/>
                     </Border>
-                    <TextBlock x:Name="headAppMem" Text="内存占用" Style="{StaticResource ColHead}" Margin="7,0,0,0"
+                    <TextBlock x:Name="headAppMem" Text="内存占用" Style="{StaticResource ColTitle}" Margin="7,0,0,0"
                                Cursor="Hand" ToolTip="点一下按内存排序"
                                MouseLeftButtonUp="AppSort_Mem"/>
                   </StackPanel>
-                  <Rectangle Grid.ColumnSpan="3" Height="1" Stroke="#b5b5b0" StrokeThickness="1"
-                             StrokeDashArray="3,2" VerticalAlignment="Bottom"/>
+                  <Rectangle Grid.ColumnSpan="3" Height="1" Stroke="{StaticResource LineHair}"
+                             StrokeThickness="1" StrokeDashArray="3,2" VerticalAlignment="Bottom"/>
                 </Grid>
                 <ListBox x:Name="appList" Grid.Row="2" Margin="0,8,0,0" BorderThickness="0"
-                         Background="Transparent" HorizontalContentAlignment="Stretch"
+                         Background="Transparent"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ItemContainerStyle="{StaticResource RowItem}">
+                         ItemContainerStyle="{StaticResource DataRow}">
                   <ListBox.Resources>
                     <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}"/>
                   </ListBox.Resources>
@@ -476,53 +753,41 @@
                     <DataTemplate>
                       <Grid>
                         <Grid.ColumnDefinitions>
-                          <ColumnDefinition Width="*"/>
-                          <ColumnDefinition Width="120"/>
-                          <ColumnDefinition Width="150"/>
+                          <ColumnDefinition Width="{StaticResource ColAppName}"/>
+                          <ColumnDefinition Width="{StaticResource ColAppCpu}"/>
+                          <ColumnDefinition Width="{StaticResource ColAppMem}"/>
                         </Grid.ColumnDefinitions>
                         <Grid Grid.Column="0">
                           <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                           </Grid.ColumnDefinitions>
-                          <Grid Grid.Column="0" Width="38" Height="38">
-                            <Border Background="{StaticResource Dark2}"/>
-                            <Path Fill="#ffffff" Data="M0,0 L7,0 L7,7 Z" Width="7" Height="7"
-                                  HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
-                            <local:IconView Key="{Binding IconKey}" Width="20" Height="20"
-                                            StrokeThickness="1.8" Stroke="#ffffff"
-                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                          </Grid>
+                          <ContentControl Grid.Column="0" Style="{StaticResource RowIconTile}"/>
                           <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding Name}" FontSize="14" Foreground="#454540"
-                                       TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Text="{Binding Sub}" FontSize="11"
-                                       Foreground="{StaticResource InkDim}" Margin="0,1,0,0"
-                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource RowName}"/>
+                            <TextBlock Text="{Binding Sub}" Style="{StaticResource RowSub}" Margin="0,1,0,0"/>
                           </StackPanel>
                         </Grid>
+                        <!-- CPU：数值 + 一条按全表最大值归一的迷你条（条比数字更容易一眼比大小） -->
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Text="{Binding CpuText}" FontSize="15" Foreground="#3f3f3c"
-                                       Typography.NumeralAlignment="Tabular"/>
-                            <TextBlock Text="%" FontSize="12" Foreground="{StaticResource Blue}"
-                                       VerticalAlignment="Bottom"/>
+                            <TextBlock Text="{Binding CpuText}" Style="{StaticResource RowValue}"/>
+                            <TextBlock Text="%" FontSize="{StaticResource FsSmall}"
+                                       Foreground="{StaticResource Cool}" VerticalAlignment="Bottom"/>
                           </StackPanel>
-                          <Grid HorizontalAlignment="Right" Width="86" Height="3" Margin="0,4,0,0">
-                            <Rectangle Fill="#e6e6e2"/>
-                            <Rectangle Fill="{StaticResource YellowBar}" HorizontalAlignment="Left"
-                                       Width="{Binding CpuBar}"/>
+                          <Grid Style="{StaticResource MiniTrack}">
+                            <Rectangle Fill="{StaticResource FillTrack}"/>
+                            <Rectangle Style="{StaticResource MiniBar}" Width="{Binding CpuBar}"/>
                           </Grid>
                         </StackPanel>
+                        <!-- 内存：同上一列（两条迷你条各自归一，别互相比——口径不同） -->
                         <StackPanel Grid.Column="2" VerticalAlignment="Center">
                           <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Text="{Binding MemText}" FontSize="15" Foreground="#3f3f3c"
-                                       Typography.NumeralAlignment="Tabular"/>
+                            <TextBlock Text="{Binding MemText}" Style="{StaticResource RowValue}"/>
                           </StackPanel>
-                          <Grid HorizontalAlignment="Right" Width="86" Height="3" Margin="0,4,0,0">
-                            <Rectangle Fill="#e6e6e2"/>
-                            <Rectangle Fill="{StaticResource YellowBar}" HorizontalAlignment="Left"
-                                       Width="{Binding MemBar}"/>
+                          <Grid Style="{StaticResource MiniTrack}">
+                            <Rectangle Fill="{StaticResource FillTrack}"/>
+                            <Rectangle Style="{StaticResource MiniBar}" Width="{Binding MemBar}"/>
                           </Grid>
                         </StackPanel>
                       </Grid>
@@ -533,7 +798,7 @@
             </Border>
           </Grid>
 
-          <!-- 底部信息条（.bottom-bar） -->
+          <!-- 底部信息条：左边两行状态，右边一个大刷新按钮 -->
           <Border Grid.Row="1" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
                   BorderThickness="1" Padding="14,12" HorizontalAlignment="Center"
                   Margin="0,18,0,0">
@@ -544,53 +809,51 @@
               </Grid.ColumnDefinitions>
               <StackPanel Grid.Column="0" VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal">
-                  <Ellipse Width="7" Height="7" Stroke="{StaticResource InkDim}" StrokeThickness="2"
-                           VerticalAlignment="Center"/>
-                  <TextBlock Text="上次数据刷新：" FontSize="13" Foreground="{StaticResource Ink}"
-                             Margin="10,0,0,0"/>
-                  <TextBlock x:Name="lastRefresh" Text="刚刚" FontSize="13"
+                  <Ellipse Style="{StaticResource RingDot}"/>
+                  <TextBlock Text="上次数据刷新：" FontSize="{StaticResource FsBody}"
+                             Foreground="{StaticResource Ink}" Margin="10,0,0,0"/>
+                  <TextBlock x:Name="lastRefresh" Text="刚刚" FontSize="{StaticResource FsBody}"
                              Foreground="{StaticResource Ink}"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                  <Ellipse Width="7" Height="7" Stroke="{StaticResource InkDim}" StrokeThickness="2"
-                           VerticalAlignment="Center"/>
-                  <TextBlock Text="当前监控目标" FontSize="13" Foreground="{StaticResource Ink}"
-                             Margin="10,0,0,0"/>
+                  <Ellipse Style="{StaticResource RingDot}"/>
+                  <TextBlock Text="当前监控目标" FontSize="{StaticResource FsBody}"
+                             Foreground="{StaticResource Ink}" Margin="10,0,0,0"/>
                   <StackPanel Orientation="Horizontal" Margin="26,0,0,0">
-                    <Border Background="#c9c9c4" Padding="14,4">
-                      <TextBlock x:Name="tagCpu" Text="CPU --" FontSize="12"
-                                 Foreground="{StaticResource Ink}"/>
+                    <Border Style="{StaticResource TagPlate}">
+                      <TextBlock x:Name="tagCpu" Text="CPU --" Style="{StaticResource TagText}"/>
                     </Border>
-                    <Border Background="#c9c9c4" Padding="14,4" Margin="8,0,0,0">
-                      <TextBlock x:Name="tagMem" Text="MEM --" FontSize="12"
-                                 Foreground="{StaticResource Ink}"/>
+                    <Border Style="{StaticResource TagPlate}" Margin="8,0,0,0">
+                      <TextBlock x:Name="tagMem" Text="MEM --" Style="{StaticResource TagText}"/>
                     </Border>
-                    <Border Background="#c9c9c4" Padding="14,4" Margin="8,0,0,0">
-                      <TextBlock x:Name="tagComp" Text="综合 --" FontSize="12"
-                                 Foreground="{StaticResource Ink}"/>
+                    <Border Style="{StaticResource TagPlate}" Margin="8,0,0,0">
+                      <TextBlock x:Name="tagComp" Text="综合 --" Style="{StaticResource TagText}"/>
                     </Border>
                   </StackPanel>
                 </StackPanel>
               </StackPanel>
 
-              <!-- 刷新数据（.refresh-btn：深底 + 左侧超大图标被裁切） -->
+              <!-- 刷新数据：深炭大按钮，左侧塞一个远超按钮尺寸的图标、被按钮裁掉大半
+                   （露出来的那一段弧看着像"转起来了"，是真按下去之前唯一的动感） -->
               <Button Grid.Column="1" x:Name="btnRefresh" Click="Refresh_Click" Cursor="Hand"
                       Margin="26,0,0,0">
                 <Button.Template>
                   <ControlTemplate TargetType="Button">
-                    <Border Background="{StaticResource Dark2}" CornerRadius="18" Padding="36,20"
+                    <Border Background="{StaticResource PlateDeep}"
+                            CornerRadius="{StaticResource RadiusCta}" Padding="36,20"
                             ClipToBounds="True" x:Name="bg">
                       <Grid>
                         <local:IconView Key="refresh" Width="112" Height="112" StrokeThickness="2.4"
-                                        Stroke="#8d8d87" HorizontalAlignment="Left"
+                                        Stroke="{StaticResource IconFaint}" HorizontalAlignment="Left"
                                         VerticalAlignment="Center" Margin="-54,0,0,0"/>
-                        <TextBlock Text="刷新数据" FontSize="18" Foreground="#ffffff"
+                        <TextBlock Text="刷新数据" FontSize="{StaticResource FsCta}"
+                                   Foreground="{StaticResource OnPlate}"
                                    Margin="74,0,0,0" VerticalAlignment="Center"/>
                       </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                       <Trigger Property="IsMouseOver" Value="True">
-                        <Setter TargetName="bg" Property="Background" Value="#3f3f3c"/>
+                        <Setter TargetName="bg" Property="Background" Value="{StaticResource PlateLift}"/>
                       </Trigger>
                     </ControlTemplate.Triggers>
                   </ControlTemplate>
@@ -607,39 +870,42 @@
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
 
-          <!-- 表头带（.perf-head-strip） -->
-          <Border Grid.Row="0" Background="#d95a5a56" CornerRadius="6" Padding="12,10"
-                  HorizontalAlignment="Stretch">
+          <!-- 表头带：四列（设备信息 / 走势 / 当前数据 / 规格），列宽与行模板同源 -->
+          <Border Grid.Row="0" Style="{StaticResource StripHead}">
             <Grid>
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="205"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="175"/>
-                <ColumnDefinition Width="175"/>
+                <ColumnDefinition Width="{StaticResource ColDevice}"/>
+                <ColumnDefinition Width="{StaticResource ColTrend}"/>
+                <ColumnDefinition Width="{StaticResource ColCur}"/>
+                <ColumnDefinition Width="{StaticResource ColLast}"/>
               </Grid.ColumnDefinitions>
               <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="设备信息" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="设备信息" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-                <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="占用率走势" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="占用率走势" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="2" Orientation="Horizontal">
-                <local:IconView Key="cpu" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="当前数据" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="cpu" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="当前数据" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="3" Orientation="Horizontal">
-                <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="规格" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="规格" Style="{StaticResource StripText}"/>
               </StackPanel>
             </Grid>
           </Border>
 
           <ListBox x:Name="devList" Grid.Row="1" Margin="0,14,0,0" BorderThickness="0"
-                   Background="Transparent" HorizontalContentAlignment="Stretch"
+                   Background="Transparent"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                   ItemContainerStyle="{StaticResource RowItem}">
+                   ItemContainerStyle="{StaticResource DataRow}">
             <ListBox.Resources>
               <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}"/>
             </ListBox.Resources>
@@ -647,59 +913,56 @@
               <DataTemplate>
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="205"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="175"/>
-                    <ColumnDefinition Width="175"/>
+                    <ColumnDefinition Width="{StaticResource ColDevice}"/>
+                    <ColumnDefinition Width="{StaticResource ColTrend}"/>
+                    <ColumnDefinition Width="{StaticResource ColCur}"/>
+                    <ColumnDefinition Width="{StaticResource ColLast}"/>
                   </Grid.ColumnDefinitions>
-                  <!-- 设备信息：名称/副标题 + 可点的深色图标按钮（点开详情） -->
-                  <Grid Grid.Column="0" Margin="0,0,0,0">
+                  <!-- 设备信息：名称/副标题 + 可点的深色图标按钮（点开型号与规格） -->
+                  <Grid Grid.Column="0">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="*"/>
                       <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                      <TextBlock Text="{Binding Name}" FontSize="14" Foreground="#454540"
-                                 TextTrimming="CharacterEllipsis"/>
-                      <TextBlock Text="{Binding Sub}" FontSize="11" Foreground="{StaticResource InkDim}"
-                                 Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Name}" Style="{StaticResource RowName}"/>
+                      <TextBlock Text="{Binding Sub}" Style="{StaticResource RowSub}" Margin="0,2,0,0"/>
                     </StackPanel>
+                    <!-- 44 的图标块比列表里的行图标再大一档：它是这一页唯一的"入口"，得按得准 -->
                     <Grid Grid.Column="1" Width="44" Height="44" Cursor="Hand"
                           MouseLeftButtonUp="DevIcon_Click" Tag="{Binding}">
-                      <Border Background="{StaticResource Dark2}"/>
-                      <Path Fill="#ffffff" Data="M0,0 L8,0 L8,8 Z" Width="8" Height="8"
+                      <Border Background="{StaticResource PlateDeep}"/>
+                      <Path Fill="{StaticResource SurfaceRaised}" Data="{StaticResource CutCorner8}"
+                            Width="8" Height="8"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
                       <local:IconView Key="{Binding IconKey}" Width="20" Height="20"
-                                      StrokeThickness="1.8" Stroke="#ffffff"
+                                      StrokeThickness="1.8" Stroke="{StaticResource OnPlate}"
                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Grid>
                   </Grid>
                   <!-- 占用率走势（折线；纵轴按数据缩放，两条线类型不同的走左右双轴） -->
-                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}"
-                                     AutoScale="True" Height="66" Margin="10,0,14,0"/>
+                  <local:SparkVisual Grid.Column="1" Style="{StaticResource TrendPlot}"
+                                     Data="{Binding}" Tick="{Binding HistTick}" AutoScale="True"/>
                   <!-- 当前数据两行：小圆点颜色与走势图的线一一对应（主指标黄、次指标蓝） -->
                   <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
-                      <Ellipse Width="7" Height="7" Fill="#ded24e" VerticalAlignment="Center"/>
-                      <TextBlock Text="{Binding Cur1Lbl}" FontSize="13" Foreground="#5a5a55"
-                                 Margin="6,0,0,0" MinWidth="34"/>
-                      <TextBlock Text="{Binding Cur1Val}" FontSize="15" Foreground="#3f3f3c"
-                                 Margin="8,0,0,0"/>
+                      <Ellipse Style="{StaticResource SeriesDot}" Fill="{StaticResource AccentSoft}"/>
+                      <TextBlock Text="{Binding Cur1Lbl}" Style="{StaticResource CurLbl}"/>
+                      <TextBlock Text="{Binding Cur1Val}" Style="{StaticResource CurVal}"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                      <Ellipse Width="7" Height="7" Fill="{StaticResource Blue}" VerticalAlignment="Center"/>
-                      <TextBlock Text="{Binding Cur2Lbl}" FontSize="13" Foreground="#5a5a55"
-                                 Margin="6,0,0,0" MinWidth="34"/>
-                      <TextBlock Text="{Binding Cur2Val}" FontSize="15" Foreground="#3f3f3c"
-                                 Margin="8,0,0,0"/>
+                      <Ellipse Style="{StaticResource SeriesDot}" Fill="{StaticResource Cool}"/>
+                      <TextBlock Text="{Binding Cur2Lbl}" Style="{StaticResource CurLbl}"/>
+                      <TextBlock Text="{Binding Cur2Val}" Style="{StaticResource CurVal}"/>
                     </StackPanel>
                   </StackPanel>
-                  <!-- 规格 -->
+                  <!-- 规格：一行（这页只要一个"够不够用"的判断，多的参数在详情页里） -->
                   <StackPanel Grid.Column="3" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
-                      <TextBlock Text="规格" FontSize="13" Foreground="{StaticResource InkDim}"
-                                 MinWidth="34"/>
-                      <TextBlock Text="{Binding Spec}" FontSize="13" Foreground="#5a5a55"
+                      <TextBlock Text="规格" FontSize="{StaticResource FsBody}"
+                                 Foreground="{StaticResource InkDim}" MinWidth="34"/>
+                      <TextBlock Text="{Binding Spec}" FontSize="{StaticResource FsBody}"
+                                 Foreground="{StaticResource InkSoft}"
                                  Margin="8,0,0,0" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
                   </StackPanel>
@@ -899,29 +1162,33 @@
             <RowDefinition Height="*"/>
           </Grid.RowDefinitions>
 
-          <Border Grid.Row="0" Background="#d95a5a56" CornerRadius="6" Padding="12,10">
+          <Border Grid.Row="0" Style="{StaticResource StripHead}">
             <Grid>
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="205"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="175"/>
-                <ColumnDefinition Width="175"/>
+                <ColumnDefinition Width="{StaticResource ColDevice}"/>
+                <ColumnDefinition Width="{StaticResource ColTrend}"/>
+                <ColumnDefinition Width="{StaticResource ColCur}"/>
+                <ColumnDefinition Width="{StaticResource ColLast}"/>
               </Grid.ColumnDefinitions>
               <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="应用" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="app" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="应用" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-                <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="内存占用率走势" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="activity" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="内存占用率走势" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="2" Orientation="Horizontal">
-                <local:IconView Key="mem" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="当前数据" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="mem" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="当前数据" Style="{StaticResource StripText}"/>
               </StackPanel>
               <StackPanel Grid.Column="3" Orientation="Horizontal">
-                <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2" Stroke="#ffffff"/>
-                <TextBlock Text="占比" FontSize="13" Foreground="#ffffff" Margin="8,0,0,0"/>
+                <local:IconView Key="layers" Width="14" Height="14" StrokeThickness="2"
+                                Stroke="{StaticResource OnPlate}"/>
+                <TextBlock Text="占比" Style="{StaticResource StripText}"/>
               </StackPanel>
             </Grid>
           </Border>
@@ -929,10 +1196,10 @@
           <!-- 图例：两条线的口径不同（已占用对物理内存，已提交对提交额度），并解释为什么有时"提交 < 占用" -->
           <StackPanel Grid.Row="1" Margin="4,10,0,0">
             <StackPanel Orientation="Horizontal">
-              <Ellipse Width="8" Height="8" Fill="#ded24e" VerticalAlignment="Center"/>
+              <Ellipse Width="8" Height="8" Fill="{StaticResource AccentSoft}" VerticalAlignment="Center"/>
               <TextBlock Text="已占用（工作集：驻留物理内存的页，含与其他进程共享的页）" FontSize="12"
                          Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
-              <Ellipse Width="8" Height="8" Fill="{StaticResource Blue}" VerticalAlignment="Center"
+              <Ellipse Width="8" Height="8" Fill="{StaticResource Cool}" VerticalAlignment="Center"
                        Margin="18,0,0,0"/>
               <TextBlock Text="已提交（私有提交：含未驻留的页，不含共享页）" FontSize="12"
                          Foreground="{StaticResource Ink}" Margin="6,0,0,0"/>
@@ -943,9 +1210,9 @@
           </StackPanel>
 
           <ListBox x:Name="memList" Grid.Row="2" Margin="0,10,0,0" BorderThickness="0"
-                   Background="Transparent" HorizontalContentAlignment="Stretch"
+                   Background="Transparent"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                   ItemContainerStyle="{StaticResource RowItem}">
+                   ItemContainerStyle="{StaticResource DataRow}">
             <ListBox.Resources>
               <Style TargetType="ScrollBar" BasedOn="{StaticResource SlimScroll}"/>
             </ListBox.Resources>
@@ -953,51 +1220,38 @@
               <DataTemplate>
                 <Grid>
                   <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="205"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="175"/>
-                    <ColumnDefinition Width="175"/>
+                    <ColumnDefinition Width="{StaticResource ColDevice}"/>
+                    <ColumnDefinition Width="{StaticResource ColTrend}"/>
+                    <ColumnDefinition Width="{StaticResource ColCur}"/>
+                    <ColumnDefinition Width="{StaticResource ColLast}"/>
                   </Grid.ColumnDefinitions>
                   <Grid Grid.Column="0">
                     <Grid.ColumnDefinitions>
                       <ColumnDefinition Width="Auto"/>
                       <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Grid Grid.Column="0" Width="38" Height="38">
-                      <Border Background="{StaticResource Dark2}"/>
-                      <Path Fill="#ffffff" Data="M0,0 L7,0 L7,7 Z" Width="7" Height="7"
-                            HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
-                      <local:IconView Key="{Binding IconKey}" Width="20" Height="20"
-                                      StrokeThickness="1.8" Stroke="#ffffff"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Grid>
+                    <ContentControl Grid.Column="0" Style="{StaticResource RowIconTile}"/>
                     <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
-                      <TextBlock Text="{Binding Name}" FontSize="14" Foreground="#454540"
-                                 TextTrimming="CharacterEllipsis"/>
-                      <TextBlock Text="{Binding Sub}" FontSize="11" Foreground="{StaticResource InkDim}"
-                                 Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Text="{Binding Name}" Style="{StaticResource RowName}"/>
+                      <TextBlock Text="{Binding Sub}" Style="{StaticResource RowSub}" Margin="0,2,0,0"/>
                     </StackPanel>
                   </Grid>
-                  <local:SparkVisual Grid.Column="1" Data="{Binding}" Tick="{Binding HistTick}" AutoScale="True"
-                                     Height="66" Margin="10,0,14,0"/>
+                  <local:SparkVisual Grid.Column="1" Style="{StaticResource TrendPlot}"
+                                     Data="{Binding}" Tick="{Binding HistTick}" AutoScale="True"/>
                   <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
-                      <Ellipse Width="7" Height="7" Fill="#ded24e" VerticalAlignment="Center"/>
-                      <TextBlock Text="已占用" FontSize="13" Foreground="#5a5a55" Margin="6,0,0,0"
-                                 MinWidth="42"/>
-                      <TextBlock Text="{Binding MemVal}" FontSize="15" Foreground="#3f3f3c"
-                                 Margin="8,0,0,0"/>
+                      <Ellipse Style="{StaticResource SeriesDot}" Fill="{StaticResource AccentSoft}"/>
+                      <TextBlock Text="已占用" Style="{StaticResource CurLbl}" MinWidth="42"/>
+                      <TextBlock Text="{Binding MemVal}" Style="{StaticResource CurVal}"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
-                      <Ellipse Width="7" Height="7" Fill="{StaticResource Blue}" VerticalAlignment="Center"/>
-                      <TextBlock Text="已提交" FontSize="13" Foreground="#5a5a55" Margin="6,0,0,0"
-                                 MinWidth="42"/>
-                      <TextBlock Text="{Binding CommitVal}" FontSize="15" Foreground="#3f3f3c"
-                                 Margin="8,0,0,0"/>
+                      <Ellipse Style="{StaticResource SeriesDot}" Fill="{StaticResource Cool}"/>
+                      <TextBlock Text="已提交" Style="{StaticResource CurLbl}" MinWidth="42"/>
+                      <TextBlock Text="{Binding CommitVal}" Style="{StaticResource CurVal}"/>
                     </StackPanel>
                   </StackPanel>
                   <StackPanel Grid.Column="3" VerticalAlignment="Center">
-                    <TextBlock Text="{Binding PctText}" FontSize="12.5" Foreground="#5a5a55"
+                    <TextBlock Text="{Binding PctText}" FontSize="12.5" Foreground="{StaticResource InkSoft}"
                                TextWrapping="Wrap" TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                 </Grid>
@@ -1007,22 +1261,23 @@
         </Grid>
 
         <!-- ============ 设备详情覆盖页（.detail-overlay） ============ -->
-        <Grid x:Name="detailOverlay" Background="#7322221F" Visibility="Collapsed"
+        <Grid x:Name="detailOverlay" Background="{StaticResource OverlayBack}" Visibility="Collapsed"
               MouseLeftButtonUp="Detail_BackdropClick">
           <Border Width="440" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}"
                   BorderThickness="1" Padding="20,18,24,24" HorizontalAlignment="Center"
                   VerticalAlignment="Center">
             <Border.Effect>
-              <DropShadowEffect BlurRadius="44" ShadowDepth="0" Opacity="0.32"/>
+              <StaticResource ResourceKey="ShadowCard"/>
             </Border.Effect>
             <StackPanel>
               <Grid>
                 <Border Style="{StaticResource SecTitleBox}" Margin="0">
                   <TextBlock Text="型号与规格" Style="{StaticResource SecTitle}" FontSize="16"/>
                 </Border>
-                <Button Style="{StaticResource RoundBtn}" HorizontalAlignment="Right"
+                <Button Style="{StaticResource CircleButton}" HorizontalAlignment="Right"
                         VerticalAlignment="Top" Click="Detail_Close">
-                  <local:IconView Key="x" Width="18" Height="18" StrokeThickness="2.4" Stroke="#85858a"/>
+                  <local:IconView Key="x" Width="18" Height="18" StrokeThickness="2.4"
+                                  Stroke="{StaticResource IconQuiet}"/>
                 </Button>
               </Grid>
               <StackPanel x:Name="dtTable" Margin="0,10,0,0"/>

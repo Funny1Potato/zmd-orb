@@ -22,6 +22,7 @@ SOFTWARE.
 
 ---
 
-范围说明：本仓库中沿用自 zmd-manager（https://github.com/QinAnze/zmd-manager）
-的部分文件（构建脚本、CI 配置、采集端与前端视觉实现）**不在这段许可的覆盖范围内**，
-详见 THIRD-PARTY-NOTICES.md。在取得其作者许可之前，本仓库不应对外公开分发。
+第三方组件许可：界面图标取自 Lucide 图标集（ISC 许可，其中衍生自 Feather 的部分为 MIT），
+许可全文与署名随本仓库一起分发，见 THIRD-PARTY-LICENSES.txt。
+本项目与 zmd-manager 的起步关系、以及"沿用的代码已全部重写为独立实现"的核对与验证记录，
+见 THIRD-PARTY-NOTICES.md。

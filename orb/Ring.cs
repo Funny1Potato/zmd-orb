@@ -4,7 +4,8 @@ using System.Windows.Media;
 
 namespace ZmdOrb;
 
-/// <summary>环形几何与配色。参数与 frontend/ring.js 一一对应（沿用 zmd-manager 的电量环口径）。</summary>
+/// <summary>环形几何与配色。这一表参数是球面的唯一口径，`frontend/ring.js` 是它在浏览器里的对照版。
+/// 配色取自《明日方舟：终末地》协议核心电量面板的那一套（灰衬环 / 淡黄轨道 / 亮黄进度弧 / 浅内盘）。</summary>
 static class Ring
 {
     public const double Size = 160;      // 球窗口边长
@@ -40,23 +41,39 @@ static class Ring
 
     public static Color Hex(string s) => (Color)ColorConverter.ConvertFromString(s);
 
-    /// <summary>0° = 12 点方向，顺时针为正。</summary>
-    public static Point Polar(double cx, double cy, double r, double deg)
+    /// <summary>Halton 低差异序列的第 n 项（给定进制）。球与面板的粒子团都用它撒点：
+    /// u = Halton(i,2) 定纬度、v = Halton(i,3) 定经度 —— 均匀，且不像等分角的螺旋那样留条纹。</summary>
+    public static double Halton(int n, int b)
     {
-        double a = (deg - 90) * Math.PI / 180;
-        return new Point(cx + r * Math.Cos(a), cy + r * Math.Sin(a));
+        double f = 1, r = 0;
+        while (n > 0)
+        {
+            f /= b;
+            r += f * (n % b);
+            n /= b;
+        }
+        return r;
     }
 
-    /// <summary>arcPath 的等价物：弧长 &gt; 180° 时置 large-arc 标志，端点越界自动补一圈。</summary>
+    /// <summary>圆上取点。口径是"0° = 12 点方向、顺时针为正"，于是直接按 sin/cos 组合写即可 ——
+    /// 等价于"先把角度减掉 90° 再取 cos/sin"，少一步。</summary>
+    public static Point Polar(double cx, double cy, double r, double deg)
+    {
+        double t = deg * Math.PI / 180;
+        return new Point(cx + r * Math.Sin(t), cy - r * Math.Cos(t));
+    }
+
+    /// <summary>一段弧（只描边、不闭合）。两件事要自己管：to 比 from 小时说明是"跨过 12 点"的写法，
+    /// 得补一圈；弧长超过 180° 必须置 large-arc，否则会挑短的那条弧画。</summary>
     public static Geometry Arc(double cx, double cy, double r, double from, double to)
     {
-        if (to < from) to += 360;
+        double sweep = to < from ? to + 360 : to;
         var g = new StreamGeometry();
         using (var c = g.Open())
         {
             c.BeginFigure(Polar(cx, cy, r, from), false, false);
-            c.ArcTo(Polar(cx, cy, r, to), new Size(r, r), 0,
-                    to - from > 180, SweepDirection.Clockwise, true, false);
+            c.ArcTo(Polar(cx, cy, r, sweep), new Size(r, r), 0,
+                    sweep - from > 180, SweepDirection.Clockwise, true, false);
         }
         g.Freeze();
         return g;
@@ -67,14 +84,15 @@ static class Ring
     /// （那套只能露出两条长边，且底衬颜色会被描边色带灰）。</summary>
     public static Geometry Sector(double cx, double cy, double rIn, double rOut, double from, double to)
     {
-        if (to < from) to += 360;
-        bool large = to - from > 180;
+        double sweep = to < from ? to + 360 : to;
+        bool large = sweep - from > 180;
         var g = new StreamGeometry();
         using (var c = g.Open())
         {
             c.BeginFigure(Polar(cx, cy, rOut, from), true, true);
-            c.ArcTo(Polar(cx, cy, rOut, to), new Size(rOut, rOut), 0, large, SweepDirection.Clockwise, true, false);
-            c.LineTo(Polar(cx, cy, rIn, to), true, false);
+            c.ArcTo(Polar(cx, cy, rOut, sweep), new Size(rOut, rOut), 0, large,
+                     SweepDirection.Clockwise, true, false);
+            c.LineTo(Polar(cx, cy, rIn, sweep), true, false);
             c.ArcTo(Polar(cx, cy, rIn, from), new Size(rIn, rIn), 0, large,
                      SweepDirection.Counterclockwise, true, false);
         }
@@ -93,5 +111,9 @@ static class Ring
     }
 
     /// <summary>占用越高越警示：&lt;70% 亮黄、&lt;88% 琥珀、否则橙红。</summary>
-    public static Color ArcColor(double pct) => pct < 70 ? ArcLow : pct < 88 ? ArcMid : ArcHigh;
+    public static Color ArcColor(double pct)
+    {
+        if (pct < 70) return ArcLow;
+        return pct < 88 ? ArcMid : ArcHigh;
+    }
 }

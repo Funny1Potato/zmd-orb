@@ -13,11 +13,14 @@ using System.Windows.Threading;
 namespace ZmdOrb;
 
 /// <summary>
-/// 面板。界面照搬 zmd-manager（终末地管理器）：
-///   页1 综合占用（470px 圆环 + 应用概况列表 + 底部信息条）
-///   页2 设备性能（设备行 + 占用率走势柱 + 型号与规格覆盖页）
-///   页3 整理与系统信息（zmd-orb 自己的：三级整理、内存指标、自动整理、机器/软件环境）
-/// 实时数据来自本机采集端 http://127.0.0.1:8910/snapshot（字段与参考的采集端口径一致）。
+/// 面板。四页，顶栏中部切换：
+///   页1 综合占用（470px 圆环 + 中央读数 + 应用概况列表 + 底部信息条）
+///   页2 设备性能（设备行 + 占用率走势 + 型号与规格覆盖页）
+///   页3 应用内存（按应用聚合的占用/提交走势）
+///   页4 整理与系统信息（三级整理、读数卡、自动整理、机器与软件环境）
+/// 观感口径分两处、合起来才是一套：颜色/字号/圆角/列宽在 PanelWindow.xaml 的"设计令牌"一节，
+/// 这边只放"什么时候用哪一档"（动画时长、刷新阈值、迷你条的归一基准）。
+/// 实时数据来自本机采集端 http://127.0.0.1:8910/snapshot。
 /// </summary>
 public partial class PanelWindow : Window
 {
@@ -52,10 +55,28 @@ public partial class PanelWindow : Window
 
     public Func<double>? BallFps { get; set; }
 
-    static readonly Brush LiveDot = Frozen("#3bb36b");
-    static readonly Brush DemoDot = Frozen("#b9b9b3");
-    static readonly Brush YellowBr = Frozen("#ffdf00");
-    static readonly Brush GreyBr = Frozen("#75756f");
+    /* ---- 面板的"会动、会判"的几个口径：数值只在这里出现一次 ----
+       （颜色/字号/圆角/列宽在 PanelWindow.xaml 的令牌一节，这边只管时长、阈值、归一基准） */
+    const int PageEnterMs = 360;         // 切页进场：淡入 + 上移
+    const double PageEnterShift = 10;    // 进场位移（DIP）：再大就像页面在跳
+    const int PanelToggleMs = 260;       // 首页收起/展开"应用概况"：淡出 + 缩放
+    const double PanelToggleScale = 0.94; // 收起时缩到几成（缩一点才像"被收走"，不是"啪"地没了）
+    const int JustNowSecs = 3;           // "上次刷新"多久之内写"刚刚"（采样 1 秒一次，报秒数没意义）
+    const double MiniTrackWidth = 86;    // 迷你条轨道宽（必须与 XAML 的 MiniTrack 一致）
+    const double MiniCpuBase = 10;       // 迷你条分母下限（CPU %）
+    const double MiniMemBase = 500;      // 迷你条分母下限（内存 MB）
+    const double MiniBarMin = 2;         // 迷你条最短长度：零占用也留个起点，否则那行是空的
+    const double FallbackWCpu = 0.4;     // 两个权重都被填成 0 时的兜底比例（出厂 0.4/0.6）
+    const double FallbackWMem = 0.6;
+
+    /* ---- 代码里要按状态换色的几个点（XAML 令牌的同值副本：它们每轮都要改颜色，
+       走 FindResource 等于每轮过一次字典，就近冻成静态笔刷） ---- */
+    static readonly Brush LiveDot = Frozen("#3bb36b");     // 数据源连上（胶囊绿点）
+    static readonly Brush IdleDot = Frozen("#b9b9b3");     // 没连上（演示）
+    static readonly Brush AccentBr = Frozen("#ffdf00");    // 页签选中的图标色 / 开关的"开"
+    static readonly Brush IconIdleBr = Frozen("#75756f");  // 页签未选中
+    static readonly Brush SwitchOffBr = Frozen("#777777"); // 开关的"关"：黄→灰，一眼看出关着
+    static readonly Brush PlateBr = Frozen("#3a3a38");     // 开关上的点（开），同令牌 Plate
 
     public PanelWindow()
     {
@@ -126,29 +147,34 @@ public partial class PanelWindow : Window
         tabPerf.Tag = idx == 1 ? "active" : null;
         tabMem.Tag = idx == 2 ? "active" : null;
         tabOrb.Tag = idx == 3 ? "active" : null;
-        ic1.Stroke = idx == 0 ? YellowBr : GreyBr;
-        ic2.Stroke = idx == 1 ? YellowBr : GreyBr;
-        ic3.Stroke = idx == 2 ? YellowBr : GreyBr;
-        ic4.Stroke = idx == 3 ? YellowBr : GreyBr;
+        ic1.Stroke = idx == 0 ? AccentBr : IconIdleBr;
+        ic2.Stroke = idx == 1 ? AccentBr : IconIdleBr;
+        ic3.Stroke = idx == 2 ? AccentBr : IconIdleBr;
+        ic4.Stroke = idx == 3 ? AccentBr : IconIdleBr;
 
         pageOverview.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
         pagePerf.Visibility = idx == 1 ? Visibility.Visible : Visibility.Collapsed;
         pageMem.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
         pageOrb.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
 
-        // 参考的进场动画：淡入 + 上移 10px，0.36s 缓出
-        var page = idx == 0 ? pageOverview : idx == 1 ? pagePerf : idx == 2 ? pageMem : pageOrb;
-        page.Opacity = 0;
-        var tt = new TranslateTransform(0, 10);
-        page.RenderTransform = tt;
-        page.BeginAnimation(OpacityProperty,
-            new DoubleAnimation(1, TimeSpan.FromMilliseconds(360)) { EasingFunction = EaseOut() });
-        tt.BeginAnimation(TranslateTransform.YProperty,
-            new DoubleAnimation(0, TimeSpan.FromMilliseconds(360)) { EasingFunction = EaseOut() });
+        PlayEnter(idx == 0 ? pageOverview : idx == 1 ? pagePerf : idx == 2 ? pageMem : pageOrb);
 
         string[] pageNames = { "综合占用", "设备性能", "应用内存", "整理与系统信息" };
         Diag.Log($"面板：切到第 {idx + 1} 页（{pageNames[idx]}）");
         Poll();        // 这一页要的数据可能刚被跳过（按页取数），立刻补一次，别等下一拍
+    }
+
+    /// <summary>页面进场：淡入 + 自下而上 10px，一起做才像"翻过来"——只淡入像换图，
+    /// 位移更大又像页面在跳。缓出走 CubicEase（先快后慢，落位是"停住"而不是"刹住"）。</summary>
+    static void PlayEnter(FrameworkElement page)
+    {
+        page.Opacity = 0;
+        var tt = new TranslateTransform(0, PageEnterShift);
+        page.RenderTransform = tt;
+        page.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(1, TimeSpan.FromMilliseconds(PageEnterMs)) { EasingFunction = EaseOut() });
+        tt.BeginAnimation(TranslateTransform.YProperty,
+            new DoubleAnimation(0, TimeSpan.FromMilliseconds(PageEnterMs)) { EasingFunction = EaseOut() });
     }
 
     static IEasingFunction EaseOut() =>
@@ -173,7 +199,7 @@ public partial class PanelWindow : Window
             var s = await MemoryApi.GetAsync(Want());
             if (s == null)
             {
-                srcDot.Fill = DemoDot;
+                srcDot.Fill = IdleDot;
                 srcText.Text = "演示";
                 statusLine.Text = "采集端正在启动或未运行（127.0.0.1:8910）——球此时取不到数，也不会执行整理。";
                 return;
@@ -449,19 +475,25 @@ public partial class PanelWindow : Window
                 a.Sub = rows[i].Sub;
             }
         }
-        // 迷你条按全表最大值归一（参考的 updateAppTexts）
-        double maxCpu = Math.Max(10, _appRows.Count > 0 ? _appRows.Max(r => r.Cpu) : 1);
-        double maxMem = Math.Max(500, _appRows.Count > 0 ? _appRows.Max(r => r.MemMb) : 1);
+        // 迷你条按全表最大值归一：条比数字更容易一眼比大小，所以每列各按自己的口径满格
+        double maxCpu = _appRows.Count > 0 ? _appRows.Max(r => r.Cpu) : 0;
+        double maxMem = _appRows.Count > 0 ? _appRows.Max(r => r.MemMb) : 0;
         foreach (var a in _appRows)
         {
             a.CpuText = a.Cpu.ToString("F1");
             a.MemText = a.MemMb >= 1024 ? (a.MemMb / 1024).ToString("F2") + " GB"
                                         : a.MemMb.ToString("F0") + " MB";
-            a.CpuBar = Math.Min(86, Math.Max(2, a.Cpu / maxCpu * 86));
-            a.MemBar = Math.Min(86, Math.Max(2, a.MemMb / maxMem * 86));
+            a.CpuBar = MiniBar(a.Cpu, maxCpu, MiniCpuBase);
+            a.MemBar = MiniBar(a.MemMb, maxMem, MiniMemBase);
             a.Notify();
         }
     }
+
+    /// <summary>迷你条长度（DIP，最长 = 轨道宽）：按全表最大值归一。
+    /// 分母带下限（CPU 10% / 内存 500MB）：否则"全表最大才 0.3%"时那点小占用会被拉成满格，
+    /// 看着像吃满了；最短留 MiniBarMin，零占用的行也得有个起点，不然那一行是空的。</summary>
+    static double MiniBar(double value, double max, double floor) =>
+        Math.Min(MiniTrackWidth, Math.Max(MiniBarMin, value / Math.Max(floor, max) * MiniTrackWidth));
 
     /* ---- 页1：应用概况的排序（点表头） ---- */
 
@@ -735,7 +767,7 @@ public partial class PanelWindow : Window
     static double Combined(double cpu, double mem, double wCpu, double wMem)
     {
         double sum = wCpu + wMem;
-        if (sum <= 0) { wCpu = 0.4; wMem = 0.6; sum = 1; }
+        if (sum <= 0) { wCpu = FallbackWCpu; wMem = FallbackWMem; sum = 1; }
         return Math.Max(0, Math.Min(100, (cpu * wCpu + mem * wMem) / sum));
     }
 
@@ -747,7 +779,7 @@ public partial class PanelWindow : Window
         uptime.Text = $"{(int)up.TotalHours:D2}:{up.Minutes:D2}:{up.Seconds:D2}";
         if (_uptimeRow != null) _uptimeRow.Val = UptimeText();   // 系统运行时长跟着走（静态信息重建时不刷新）
         double sec = (DateTime.Now - _lastRefresh).TotalSeconds;
-        lastRefresh.Text = sec < 3 ? "刚刚" : $"{(int)sec} 秒前";
+        lastRefresh.Text = sec < JustNowSecs ? "刚刚" : $"{(int)sec} 秒前";
     }
 
     void OnFrame(object? sender, EventArgs e)
@@ -776,22 +808,38 @@ public partial class PanelWindow : Window
     void Report_Click(object sender, MouseButtonEventArgs e)
     {
         _appsHidden = !_appsHidden;
-        reportTogglePill.Background = _appsHidden ? Frozen("#777777") : YellowBr;
-        reportToggleDot.HorizontalAlignment = _appsHidden ? HorizontalAlignment.Left : HorizontalAlignment.Right;
-        reportToggleDot.Fill = _appsHidden ? Brushes.White : Frozen("#3a3a38");
+        ApplyReportSwitch();
         if (_appsHidden)
         {
-            var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(260));
-            fade.Completed += (_, _) => appsPanel.Visibility = Visibility.Collapsed;
-            appsPanel.BeginAnimation(OpacityProperty, fade);
-            appsPanel.RenderTransform = new ScaleTransform(0.94, 0.94);
+            // 先缩到 0.94 再淡出，缩完才折叠：直接 Collapsed 是"啪"地消失，
+            // 缩一下才像是被收走的（缩放不带动画，收起时就该是"已经在缩"的样子）
+            appsPanel.RenderTransform = new ScaleTransform(PanelToggleScale, PanelToggleScale);
+            Fade(appsPanel, 0, () => appsPanel.Visibility = Visibility.Collapsed);
         }
         else
         {
             appsPanel.Visibility = Visibility.Visible;
-            appsPanel.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(260)));
             appsPanel.RenderTransform = new ScaleTransform(1, 1);
+            Fade(appsPanel, 1, null);
         }
+    }
+
+    /// <summary>开关的两种状态：黄底+点在右=开、灰底+点在左=关。
+    /// 位置那点位移在深炭徽标上本来就小，所以底色一定跟着变——不看位置也认得出开关状态。</summary>
+    void ApplyReportSwitch()
+    {
+        reportTogglePill.Background = _appsHidden ? SwitchOffBr : AccentBr;
+        reportToggleDot.HorizontalAlignment = _appsHidden ? HorizontalAlignment.Left
+                                                         : HorizontalAlignment.Right;
+        reportToggleDot.Fill = _appsHidden ? Brushes.White : PlateBr;
+    }
+
+    /// <summary>淡入/淡出到目标不透明度，到位后再执行 done（收起时才需要"淡完再折叠"）。</summary>
+    static void Fade(UIElement el, double to, Action? done)
+    {
+        var fade = new DoubleAnimation(to, TimeSpan.FromMilliseconds(PanelToggleMs));
+        if (done != null) fade.Completed += (_, _) => done();
+        el.BeginAnimation(OpacityProperty, fade);
     }
 
     void Refresh_Click(object sender, RoutedEventArgs e)
@@ -813,31 +861,22 @@ public partial class PanelWindow : Window
         detailOverlay.Visibility = Visibility.Visible;
     }
 
-    static Grid DetailLine(string label, string value)
+    /// <summary>详情表的一行：左标签（灰）+ 右值（深），行底一条虚线。
+    /// 样式在 XAML（DetailRow / DetailLbl / DetailVal 与列宽 ColDetailLbl）——视觉口径不落在代码里，
+    /// 这里只负责按数据拼结构；条目数量不固定，所以不走绑定。</summary>
+    FrameworkElement DetailLine(string label, string value)
     {
-        var g = new Grid { Margin = new Thickness(0, 2, 0, 2) };
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) });
+        var g = new Grid();
+        g.ColumnDefinitions.Add(new ColumnDefinition
+        { Width = (GridLength)FindResource("ColDetailLbl") });
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var l = new TextBlock { Text = label, FontSize = 13, Foreground = Frozen("#8a8a84") };
-        var v = new TextBlock
-        {
-            Text = value, FontSize = 13, Foreground = Frozen("#3f3f3c"),
-            TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis,
-        };
+        var l = new TextBlock { Style = (Style)FindResource("DetailLbl"), Text = label };
+        var v = new TextBlock { Style = (Style)FindResource("DetailVal"), Text = value };
         Grid.SetColumn(l, 0);
         Grid.SetColumn(v, 1);
-        var line = new Border
-        {
-            BorderBrush = Frozen("#d5d5d0"),
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(0, 7, 0, 7),
-        };
         g.Children.Add(l);
         g.Children.Add(v);
-        line.Child = g;
-        var host = new Grid();
-        host.Children.Add(line);
-        return host;
+        return new Border { Style = (Style)FindResource("DetailRow"), Child = g };
     }
 
     void Detail_Close(object sender, RoutedEventArgs e) => detailOverlay.Visibility = Visibility.Collapsed;

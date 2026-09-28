@@ -84,7 +84,9 @@ sealed class SparkVisual : FrameworkElement
         var b = row.Hist2;
         if (a.Count < 2) return;
 
-        double padTop = Math.Round(h * 0.16), padBot = 3;
+        // 顶部留一条带放上下界的刻度值（0.16 是量出来的：再小数字就压到线上了），底部留 3px 给横轴
+        const double TopBand = 0.16, BottomGap = 3;
+        double padTop = Math.Round(h * TopBand), padBot = BottomGap;
         double zone = h - padTop - padBot;
         if (zone < 4) return;
         dc.DrawLine(GridPen, new Point(0, padTop + zone * 0.5), new Point(w, padTop + zone * 0.5));

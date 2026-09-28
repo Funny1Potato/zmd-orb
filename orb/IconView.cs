@@ -1,5 +1,4 @@
 using System;
-using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Media;
 
@@ -51,27 +50,45 @@ sealed class IconView : FrameworkElement
     }
 }
 
-/// <summary>进程名 → 图标（照搬 zmd-manager 的 ICON_RULES）。</summary>
+/// <summary>
+/// 进程名 / 窗口标题 → 图标键。按关键词分组归类：第一组命中的胜出，都没命中就用 "app"。
+/// 分组有序、组内按词表顺序试，所以词表要"越具体越靠前"（例如 windowsterminal 得排在别的
+/// terminal 词前面）。命中判断是子串包含，词表里不要放太短的通用词。
+/// </summary>
 static class IconRules
 {
-    static readonly (Regex Re, string Key)[] Rules =
+    static readonly (string Key, string[] Words)[] Groups =
     {
-        (new Regex(@"msedge|chrome|firefox|brave|browser|360se|qqbrowser|sogou|opera|iexplore|edge", RegexOptions.IgnoreCase), "browser"),
-        (new Regex(@"code|devenv|idea|pycharm|webstorm|cursor|notepad|sublime|eclipse|studio64|rider|goland|clion|vim", RegexOptions.IgnoreCase), "code"),
-        (new Regex(@"blender|maya|3dsmax|cinema|unity|unreal|obs|photoshop|illustrator|premiere|afterfx|davinci|corona|vray", RegexOptions.IgnoreCase), "layers"),
-        (new Regex(@"steam|epic|wegame|valorant|league|minecraft|overwolf|roblox|game", RegexOptions.IgnoreCase), "video"),
-        (new Regex(@"mysql|postgres|redis|mongod|sqlservr|oracle|sqlite|elasticsearch|etcd", RegexOptions.IgnoreCase), "db"),
-        (new Regex(@"wechat|weixin|\bqq\b|dingtalk|telegram|discord|slack|feishu|lark|wecom|wxwork|skype|teams", RegexOptions.IgnoreCase), "chat"),
-        (new Regex(@"music|spotify|cloudmusic|kugou|kuwo|foobar", RegexOptions.IgnoreCase), "music"),
-        (new Regex(@"powershell|cmd|windowsterminal|^wt$|conhost|bash|zsh|ssh|putty|wsl|ubuntu|debian", RegexOptions.IgnoreCase), "terminal"),
-        (new Regex(@"explorer|everything|totalcmd|directory|7zfm|files", RegexOptions.IgnoreCase), "folder"),
-        (new Regex(@"svchost|system|csrss|wininit|services|lsass|dwm|winlogon|audiodg|spoolsv|searchindexer|msmpeng|runtimebroker", RegexOptions.IgnoreCase), "cog"),
+        ("browser", new[] { "msedge", "chrome", "firefox", "brave", "vivaldi", "opera",
+                            "360se", "qqbrowser", "sogou", "iexplore", "edge", "browser" }),
+        ("code", new[] { "devenv", "pycharm", "webstorm", "goland", "clion", "rider",
+                         "androidstudio", "studio64", "sublime", "notepad", "eclipse",
+                         "cursor", "idea", "vim", "code" }),
+        ("layers", new[] { "photoshop", "illustrator", "premiere", "afterfx", "davinci",
+                           "blender", "3dsmax", "cinema", "unity", "unreal", "corona",
+                           "vray", "maya", "obs" }),
+        ("video", new[] { "steam", "wegame", "valorant", "league", "minecraft", "roblox",
+                          "overwolf", "epic", "game" }),
+        ("db", new[] { "elasticsearch", "postgres", "sqlservr", "mongod", "sqlite",
+                       "oracle", "redis", "mysql", "etcd" }),
+        ("chat", new[] { "dingtalk", "telegram", "discord", "feishu", "wxwork", "wecom",
+                         "weixin", "wechat", "skype", "teams", "slack", "lark", "qq" }),
+        ("music", new[] { "cloudmusic", "spotify", "kugou", "kuwo", "foobar", "music" }),
+        ("terminal", new[] { "windowsterminal", "powershell", "conhost", "putty",
+                             "ubuntu", "debian", "wsl", "cmd", "bash", "zsh", "ssh" }),
+        ("folder", new[] { "everything", "totalcmd", "explorer", "directory", "7zfm", "files" }),
+        ("cog", new[] { "searchindexer", "runtimebroker", "svchost", "winlogon", "spoolsv",
+                        "audiodg", "services", "wininit", "csrss", "lsass", "msmpeng",
+                        "system", "dwm" }),
     };
 
     public static string For(string text)
     {
-        foreach (var (re, key) in Rules)
-            if (re.IsMatch(text)) return key;
+        string t = (text ?? string.Empty).ToLowerInvariant();
+        if (t.Length == 0) return "app";
+        foreach (var (key, words) in Groups)
+            foreach (var w in words)
+                if (t.Contains(w)) return key;
         return "app";
     }
 }

@@ -336,7 +336,7 @@ def top_apps(rows):
 
 
 def build_snapshot(mem, rows):
-    """快照：zmd-manager 的那套（cpu/gpu/mem/disks/net/procs）+ zmd-orb 自己的（整理相关）。"""
+    """快照：壳要的全部读数 —— 内存与 CPU、设备（显卡/磁盘/网络）、进程列表，加上整理相关的状态。"""
     stat = state.get("stat") or {}
     now = time.time()
     dt = max(INTERVAL, now - (state.get("_net_t") or now))
@@ -369,23 +369,28 @@ def build_snapshot(mem, rows):
     prev_disk = state.get("_prev_disk") or {}
     state["_prev_disk"] = cur_disk
     disks = []
-    for i, d in enumerate(stat.get("disks", [])):
+    GB = MB * 1024
+    for no, d in enumerate(stat.get("disks", [])):
         try:
-            u = psutil.disk_usage(d["mount"])
+            usage = psutil.disk_usage(d["mount"])
         except Exception:
             continue
-        io = (state.get("disk_io") or {}).get(d["letter"], {})
-        active = io.get("% Disk Time")
+        io = (state.get("disk_io") or {}).get(d["letter"]) or {}
+        busy = io.get("% Disk Time")
         rw = ((io.get("Disk Read Bytes/sec") or 0) + (io.get("Disk Write Bytes/sec") or 0)) / MB
-        if rw <= 0 and d.get("phys") in cur_disk and d["phys"] in prev_disk:
-            a, b = prev_disk[d["phys"]], cur_disk[d["phys"]]
-            rw = ((b.read_bytes - a.read_bytes) + (b.write_bytes - a.write_bytes)) / dt / MB
+        if rw <= 0:                     # 性能计数器没给出速率就退回 psutil 的字节差
+            a, b = prev_disk.get(d.get("phys")), cur_disk.get(d.get("phys"))
+            if a and b:
+                rw = ((b.read_bytes - a.read_bytes) + (b.write_bytes - a.write_bytes)) / dt / MB
         disks.append({
-            "name": "磁盘 %d (%s)" % (i, d["letter"]),
-            "used": round(u.used / 2 ** 30, 1), "total": round(u.total / 2 ** 30, 1),
-            "pct": round(u.percent, 1),
-            "util": round(active, 1) if active is not None else 0.0,
-            "rw": "%.0f MB/s" % rw, "media": d["media"], "model": d["model"],
+            "name": "磁盘 %d (%s)" % (no, d["letter"]),
+            "used": round(usage.used / GB, 1),
+            "total": round(usage.total / GB, 1),
+            "pct": round(usage.percent, 1),
+            "util": round(busy, 1) if busy is not None else 0.0,
+            "rw": "%.0f MB/s" % rw,
+            "media": d["media"],
+            "model": d["model"],
         })
 
     g = state.get("gpu") or {}
@@ -1267,7 +1272,7 @@ def auto_tick():
         state["auto_reason"] = "想自动整理但没成：%s" % (res.get("error") or "未知")
 
 
-# ---------------- 设备数据（照搬 zmd-manager 的采集口径） ----------------
+# ---------------- 设备数据 ----------------
 # 面板的"综合占用 / 设备性能"两页要这些东西：静态硬件只在启动取一次，显卡与硬盘性能计数器走慢循环。
 SLOW_INTERVAL = 1.5     # 慢速采样（显卡 / 硬盘性能计数器）
 PROC_LIMIT = 60         # 应用概况默认显示条数（面板可改，见 app_limit）
@@ -1283,36 +1288,79 @@ NON_APP_NAMES = {"memory compression", "memcompression"}
 SUB_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 MEM_TYPE = {20: "DDR", 21: "DDR2", 24: "DDR3", 26: "DDR4", 34: "DDR5",
             27: "LPDDR", 28: "LPDDR2", 29: "LPDDR3", 30: "LPDDR4", 35: "LPDDR5"}
-_meta = {}              # pid -> {desc, title} 应用名缓存（照搬参考的缓存策略）
+_meta = {}              # pid -> {desc, title} 应用名缓存（查过就不查第二次）
+
+# ---------------- PowerShell 桥 ----------------
+# 静态硬件、显卡与硬盘读数都得靠 PowerShell 问系统。三条约定：
+#   · 输出钉成 UTF-8 —— 冻结成 backend.exe 后按系统区域编码，中文在 cp1252 区域编不出来
+#   · 失败（超时 / 退出码非 0 / 回来的不是 JSON）都记一行日志再返回 None：静默给空串会让
+#     "读不到"和"真的是空"混在一起，面板上就成了一格空白，排查时无从下手
+#   · 每条警告只记一次 —— 显卡计数器这类"这台机器上就是没有"的东西不该每秒刷一遍日志
+_PS_ARGS = ("powershell", "-NoProfile", "-NonInteractive", "-Command")
+_PS_UTF8 = "$OutputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+_ps_warned = set()
 
 
-def _ps(cmd, timeout=8):
-    """跑一段 PowerShell。强制 UTF-8 输出，免得中文在 cp936/cp1252 下乱掉。"""
+def _warn_once(msg):
+    if msg in _ps_warned:
+        return
+    _ps_warned.add(msg)
+    log("[采集端] " + msg)
+
+
+def _decode_error(raw):
+    """PowerShell 的报错文本混着两种编码：命令找不到那类走 UTF-8（脚本开头把 Console 输出钉成
+    UTF-8 了），解析错误那类是解析器直接往控制台代码页写的。先按 UTF-8 试，编不出来再按 mbcs ——
+    只按一种解，另一种必然是乱码。"""
     try:
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-             "$OutputEncoding=[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;" + cmd],
-            capture_output=True, text=True, encoding="utf-8", errors="ignore", timeout=timeout,
-            creationflags=SUB_NO_WINDOW)
-        return (r.stdout or "").strip()
-    except Exception:
-        return ""
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("mbcs", "replace")
 
 
-def _ps_json(cmd, timeout=8):
-    out = _ps("(%s) | ConvertTo-Json -Depth 5 -Compress" % cmd, timeout)
-    if not out:
+def ps_text(script, timeout=8):
+    """跑一段 PowerShell 取文本；失败返回 None。
+
+    stdout 按 UTF-8 解（脚本开头把 Console 输出编码钉成 UTF-8），stderr 走 _decode_error。"""
+    try:
+        p = subprocess.run(list(_PS_ARGS) + [_PS_UTF8 + script], capture_output=True,
+                           timeout=timeout, creationflags=SUB_NO_WINDOW)
+    except Exception as e:
+        _warn_once("PowerShell 调用失败：%s" % e)
+        return None
+    if p.returncode != 0:
+        _warn_once("PowerShell 退出码 %d：%s"
+                   % (p.returncode, _decode_error(p.stderr).strip()[:160]))
+    return p.stdout.decode("utf-8", "ignore").strip() or None
+
+
+def ps_json(script, timeout=8):
+    """同上，但让 PowerShell 自己转成 JSON 再解析；解析不了也返回 None。"""
+    txt = ps_text("(%s) | ConvertTo-Json -Depth 5 -Compress" % script, timeout)
+    if txt is None:
         return None
     try:
-        return json.loads(out)
-    except Exception:
+        return json.loads(txt)
+    except ValueError:
+        _warn_once("PowerShell 返回的不是 JSON：%s" % txt[:160])
         return None
 
 
-def as_list(j):
-    if j is None:
+def ps_rows(script, timeout=8):
+    """结果当列表用 —— 只有一条时 PowerShell 给的是对象，不是数组。"""
+    v = ps_json(script, timeout)
+    if v is None:
         return []
-    return j if isinstance(j, list) else [j]
+    return v if isinstance(v, list) else [v]
+
+
+def cim(cls, props, where="", timeout=10):
+    """Get-CimInstance 一条查询：类名与属性名都从 Python 侧拼，别在脚本字符串里手抄一遍。
+    where 给的是 WQL 条件（例如 "NetEnabled = TRUE"），由 WMI 那边筛，不走管道。"""
+    q = "Get-CimInstance -ClassName %s" % cls
+    if where:
+        q += " -Filter '%s'" % where
+    return ps_rows("%s | Select-Object %s" % (q, ", ".join(props)), timeout)
 
 
 def tidy_name(s):
@@ -1328,21 +1376,16 @@ def tidy_name(s):
 def _windows_name():
     """系统名：注册表的 ProductName 在 Win11 上仍写着 "Windows 10"，按 build ≥ 22000 校正；
     拿不到注册表就退回 platform 的读数。"""
-    try:
-        r = as_list(_ps_json("Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion' "
-                             "| Select-Object ProductName,DisplayVersion,CurrentBuild", 8))
-        d = r[0] if r else {}
-        name = (d.get("ProductName") or "").strip()
-        ver = (d.get("DisplayVersion") or "").strip()
-        build = str(d.get("CurrentBuild") or "").strip()
-        if name and build.isdigit() and int(build) >= 22000:
-            name = name.replace("Windows 10", "Windows 11")
-        parts = [p for p in (name, ver) if p]
-        if parts:
-            return " · ".join(parts)
-    except Exception as e:
-        log("[采集端] 读系统版本失败：%s" % e)
-    return "%s %s" % (platform.system(), platform.release())
+    key = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+    rows = ps_rows("Get-ItemProperty '%s' | Select-Object ProductName,DisplayVersion,CurrentBuild" % key, 8)
+    d = rows[0] if rows else {}
+    name = (d.get("ProductName") or "").strip()
+    version = (d.get("DisplayVersion") or "").strip()
+    build = str(d.get("CurrentBuild") or "").strip()
+    if name and build.isdigit() and int(build) >= 22000:     # Win11 的内核版本从 22000 起
+        name = name.replace("Windows 10", "Windows 11")
+    parts = [p for p in (name, version) if p]
+    return " · ".join(parts) if parts else "%s %s" % (platform.system(), platform.release())
 
 
 def _net_addrs():
@@ -1362,150 +1405,213 @@ def _net_addrs():
     return ", ".join(out[:3]) or "—"
 
 
-def collect_static():
-    """CPU / 内存条 / 显卡 / 网卡 / 硬盘映射 —— 只在启动时取一次。"""
-    s = {}
-    # 面板"系统信息"页要用的机器与软件环境（一次取好，之后不再变）
-    s["host"] = platform.node() or os.environ.get("COMPUTERNAME") or "—"
-    s["os_name"] = _windows_name()
-    s["kernel"] = platform.version()      # Windows 上 release() 只给"10"，version() 才是 10.0.22631
-    s["arch"] = platform.machine() or "—"
+def _machine_info():
+    """机器与软件环境（面板"系统信息"页）：一次取好，之后不再变。"""
+    info = {
+        "host": platform.node() or os.environ.get("COMPUTERNAME") or "—",
+        "os_name": _windows_name(),
+        "kernel": platform.version(),     # Windows 上 release() 只给"10"，version() 才是 10.0.22631
+        "arch": platform.machine() or "—",
+        "net_addrs": _net_addrs(),
+        "proc_ver": "%s · Python %s · pid %d" % (os.path.basename(sys.executable or "python"),
+                                                 platform.python_version(), os.getpid()),
+    }
     try:
-        s["boot"] = int(psutil.boot_time())
+        info["boot"] = int(psutil.boot_time())
     except Exception:
-        s["boot"] = 0
-    s["proc_ver"] = "%s · Python %s · pid %d" % (
-        os.path.basename(sys.executable or "python"), platform.python_version(), os.getpid())
-    s["net_addrs"] = _net_addrs()
-    cpu = as_list(_ps_json("Get-CimInstance Win32_Processor | "
-                           "Select-Object Name,MaxClockSpeed,NumberOfCores,NumberOfLogicalProcessors"))
-    cpu = cpu[0] if cpu else {}
-    s["cpu_full"] = (cpu.get("Name") or platform.processor() or "处理器").strip()
-    s["cpu_name"] = tidy_name(s["cpu_full"]) or "处理器"
-    s["cpu_threads"] = cpu.get("NumberOfLogicalProcessors") or psutil.cpu_count(logical=True) or 1
-    s["cpu_cores"] = cpu.get("NumberOfCores") or psutil.cpu_count(logical=False) or s["cpu_threads"]
-    # Win32 的 MaxClockSpeed 实际给的是**基准**频率（睿频上限 WMI 不给），所以它是基准
-    s["cpu_max"] = round((cpu.get("MaxClockSpeed") or 0) / 1000.0, 2)
+        info["boot"] = 0
+    return info
+
+
+def _cpu_info():
+    """CPU 名称、核数与频率。Win32 的 MaxClockSpeed 给的是**基准**频率（睿频上限 WMI 不给），
+    所以 cpu_max 记基准，cpu_base 用 psutil 的即时读数（拿不到就退回基准）。"""
+    c = (cim("Win32_Processor",
+             ["Name", "MaxClockSpeed", "NumberOfCores", "NumberOfLogicalProcessors"]) or [{}])[0]
+    full = (c.get("Name") or platform.processor() or "处理器").strip()
+    base_mhz = round((c.get("MaxClockSpeed") or 0) / 1000.0, 2)
+    now_mhz = 0.0
     try:
         f = psutil.cpu_freq()
-        s["cpu_base"] = round((f.min or f.current or 0) / 1000.0, 2) or s["cpu_max"]
-    except Exception:
-        s["cpu_base"] = s["cpu_max"]
-
-    mems = as_list(_ps_json("Get-CimInstance Win32_PhysicalMemory | "
-                            "Select-Object Capacity,Speed,SMBIOSMemoryType,PartNumber,Manufacturer"))
-    speeds = [m.get("Speed") for m in mems if m.get("Speed")]
-    s["mem_speed"] = "%d MT/s" % max(speeds) if speeds else "—"
-    mt = next((m.get("SMBIOSMemoryType") for m in mems if m.get("SMBIOSMemoryType")), None)
-    # SMBIOSMemoryType 是码值：35=LPDDR5、34=DDR5、30=LPDDR4…（本机实测是 35，旧码表会回落成"物理内存"）
-    s["mem_type"] = MEM_TYPE.get(mt, "物理内存" if mt is None else "类型码 %s" % mt)
-    caps = [round((m.get("Capacity") or 0) / 2 ** 30) for m in mems if m.get("Capacity")]
-    s["mem_modules"] = len(mems)
-    s["mem_per_gb"] = max(caps) if caps else 0
-    s["mem_part"] = (mems[0].get("PartNumber") or "").strip() if mems else ""
-    s["mem_vendor"] = (mems[0].get("Manufacturer") or "").strip() if mems else ""
-
-    # 显卡：先排掉虚拟显示适配器（Oray/MuMu/GameViewer/Idd 等），再取显存最大的那个
-    gpus = as_list(_ps_json("Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM"))
-    real = [g for g in gpus
-            if not re.search(r"virtual|idd|oray|mumu|gameviewer|basic display|remote",
-                             (g.get("Name") or ""), re.I)]
-    pool = real or gpus
-    best, best_ram = None, -1
-    for g in pool:
-        ram = g.get("AdapterRAM") or 0
-        if isinstance(ram, (int, float)) and ram > best_ram:
-            best, best_ram = g, ram
-    s["gpu_full"] = (best or {}).get("Name") or "显卡"
-    s["gpu_name"] = tidy_name(s["gpu_full"]) or "显卡"
-    s["gpu_mem_total"] = round(best_ram / (1024 ** 3), 1) if best_ram > 0 else 0.0
-    # Win32_VideoController.AdapterRAM 是 32 位字段（大显存会截断），注册表里的 qwMemorySize 更可信
-    qw = _ps("(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
-             "{4d36e968-e325-11ce-bfc1-08002be10318}\\*' -Name 'HardwareInformation.qwMemorySize' "
-             "-ErrorAction SilentlyContinue).'HardwareInformation.qwMemorySize' | "
-             "Sort-Object -Descending | Select-Object -First 1", timeout=8)
-    try:
-        if qw and float(qw) > 0:
-            s["gpu_mem_total"] = round(float(qw) / 2 ** 30, 1)
+        now_mhz = round((f.min or f.current or 0) / 1000.0, 2)
     except Exception:
         pass
+    threads = c.get("NumberOfLogicalProcessors") or psutil.cpu_count(logical=True) or 1
+    return {"cpu_full": full, "cpu_name": tidy_name(full) or "处理器",
+            "cpu_threads": threads,
+            "cpu_cores": c.get("NumberOfCores") or psutil.cpu_count(logical=False) or threads,
+            "cpu_max": base_mhz, "cpu_base": now_mhz or base_mhz}
 
-    nets = as_list(_ps_json("Get-CimInstance Win32_NetworkAdapter | "
-                            "Where-Object {$_.NetEnabled -eq $true} | "
-                            "Select-Object NetConnectionID,Name,Speed"))
-    n = nets[0] if nets else {}
-    s["net_name"] = (n.get("NetConnectionID") or "网络").strip() or "网络"
-    s["net_desc"] = (n.get("Name") or "").strip()      # 适配器全名（如 ASIX USB to Gigabit Ethernet）
-    s["net_link"] = round((n.get("Speed") or 0) / 1e6) or 1000
 
-    # 逻辑盘 -> 物理盘 映射 + 介质类型
-    mapping = {}
-    out = _ps("""
-$d = Get-CimInstance Win32_DiskDrive
-foreach ($x in $d) {
-  $parts = Get-CimInstance -Query "ASSOCIATORS OF {Win32_DiskDrive.DeviceID='$($x.DeviceID)'} WHERE AssocClass=Win32_DiskDriveToDiskPartition"
-  foreach ($p in $parts) {
-    $logs = Get-CimInstance -Query "ASSOCIATORS OF {Win32_DiskPartition.DeviceID='$($p.DeviceID)'} WHERE AssocClass=Win32_LogicalDiskToPartition"
-    foreach ($l in $logs) { "$($l.DeviceID)|PhysicalDrive$($x.Index)|$($x.Model)" }
-  }
-}
-""", timeout=12)
-    for line in out.splitlines():
-        seg = [x.strip() for x in line.split("|")]
-        if len(seg) >= 2:
-            mapping[seg[0]] = seg[1:]
+def _mem_info():
+    """内存条：速率取最快的那条，类型按 SMBIOS 码值翻译。
+    SMBIOSMemoryType 是码值：35=LPDDR5、34=DDR5、30=LPDDR4…（本机实测 35，旧码表会回落成"物理内存"）"""
+    mods = cim("Win32_PhysicalMemory",
+               ["Capacity", "Speed", "SMBIOSMemoryType", "PartNumber", "Manufacturer"])
+    top_mhz = max([m.get("Speed") or 0 for m in mods], default=0)
+    codes = [m.get("SMBIOSMemoryType") for m in mods if m.get("SMBIOSMemoryType")]
+    caps = [round((m.get("Capacity") or 0) / 2 ** 30) for m in mods if m.get("Capacity")]
+    code = codes[0] if codes else None
+    first = mods[0] if mods else {}
+    return {"mem_speed": "%d MT/s" % top_mhz if top_mhz else "—",
+            "mem_type": MEM_TYPE.get(code, "物理内存" if code is None else "类型码 %s" % code),
+            "mem_modules": len(mods),
+            "mem_per_gb": max(caps) if caps else 0,
+            "mem_part": (first.get("PartNumber") or "").strip(),
+            "mem_vendor": (first.get("Manufacturer") or "").strip()}
 
-    phys = as_list(_ps_json("Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType", 12))
-    disks = []
+
+def _gpu_info():
+    """显卡：先排掉虚拟显示适配器（远控 / 模拟器 / 基本显示 / Idd 那些），再从剩下的里挑显存最大的。"""
+    adapters = cim("Win32_VideoController", ["Name", "AdapterRAM"])
+    real = [g for g in adapters if not re.search(
+        r"virtual|idd|oray|mumu|gameviewer|basic display|remote", g.get("Name") or "", re.I)]
+    best, ram = {}, -1
+    for g in (real or adapters):
+        v = g.get("AdapterRAM") or 0
+        if isinstance(v, (int, float)) and v > ram:
+            best, ram = g, v
+    full = (best.get("Name") or "显卡").strip()
+    # AdapterRAM 是 32 位字段（大显存会截断），注册表里的 qwMemorySize 才是真实的
+    qw = ps_text("(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\"
+                 "{4d36e968-e325-11ce-bfc1-08002be10318}\\*' -Name 'HardwareInformation.qwMemorySize' "
+                 "-ErrorAction SilentlyContinue).'HardwareInformation.qwMemorySize'", timeout=8)
+    try:
+        sizes = [float(x) for x in (qw or "").splitlines() if x.strip()]
+        if sizes and max(sizes) > 0:
+            ram = max(sizes)
+    except ValueError:
+        pass
+    return {"gpu_full": full, "gpu_name": tidy_name(full) or "显卡",
+            "gpu_mem_total": round(ram / 2 ** 30, 1) if ram > 0 else 0.0}
+
+
+def _net_info():
+    """网卡：第一个已连接的（NetConnectionID 是"以太网 / WLAN"这种给用户看的名字）。"""
+    nic = (cim("Win32_NetworkAdapter", ["NetConnectionID", "Name", "Speed"], "NetEnabled = TRUE")
+           or [{}])[0]
+    return {"net_name": (nic.get("NetConnectionID") or "网络").strip() or "网络",
+            "net_desc": (nic.get("Name") or "").strip(),
+            "net_link": round((nic.get("Speed") or 0) / 1e6) or 1000}
+
+
+def _drive_no(device_id):
+    r""""\\.\PHYSICALDRIVE3" → 3；认不出来给 -1。"""
+    m = re.search(r"physicaldrive(\d+)", device_id or "", re.I)
+    return int(m.group(1)) if m else -1
+
+
+def _disk_topology():
+    """盘符 → 物理盘号。两条关联类各查一次（盘↔分区、分区↔盘符），在 Python 里按 DeviceID 拼起来。
+    关联类里的 DeviceID 就是 "\\\\.\\PHYSICALDRIVE0"、"Disk #0, Partition #1"、"C:" 这三种字符串。"""
+    part_to_drive = {}
+    for r in ps_rows("Get-CimInstance Win32_DiskDriveToDiskPartition | Select-Object "
+                     "@{n='disk';e={$_.Antecedent.DeviceID}}, @{n='part';e={$_.Dependent.DeviceID}}", 12):
+        part_to_drive[(r.get("part") or "").lower()] = _drive_no(r.get("disk"))
+    out = {}
+    for r in ps_rows("Get-CimInstance Win32_LogicalDiskToPartition | Select-Object "
+                     "@{n='part';e={$_.Antecedent.DeviceID}}, @{n='letter';e={$_.Dependent.DeviceID}}", 12):
+        letter = (r.get("letter") or "").strip()
+        no = part_to_drive.get((r.get("part") or "").lower(), -1)
+        if letter and no >= 0:
+            out[letter.upper()] = no
+    return out
+
+
+def _media_label(hw):
+    """Get-PhysicalDisk 的 MediaType/BusType → 面板"介质"那一列；说不清就返回空串。"""
+    mt = (hw.get("MediaType") or "").strip()
+    bus = (hw.get("BusType") or "").strip()
+    if mt == "SSD":
+        return "NVMe SSD" if bus == "NVMe" else "SATA SSD"
+    if mt and mt != "Unspecified":
+        return mt
+    return "USB 存储" if bus == "USB" else ""
+
+
+def _disk_info():
+    """逻辑盘列表：盘符、挂载点、物理盘号、型号、介质类型。
+    介质类型来自 Get-PhysicalDisk，用**盘号**跟 Win32 那边对上 —— 不再按型号字符串模糊匹配
+    （两块同型号的盘之前会互相串）。"""
+    phys = {}
+    for p in ps_rows("Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,MediaType,BusType", 12):
+        try:
+            phys[int(p.get("DeviceId"))] = p
+        except (TypeError, ValueError):
+            continue
+    owners = _disk_topology()
+
+    out = []
     for p in psutil.disk_partitions():
         if "cdrom" in (p.opts or "") or not p.fstype:
             continue
         letter = p.device.rstrip("\\")
-        m = mapping.get(letter, [])
-        phys_name = m[0] if len(m) > 0 else ""
-        model = m[1] if len(m) > 1 else ""
-        media = ""
-        for ph in phys:
-            fn = ph.get("FriendlyName") or ""
-            if fn and (fn in model or model in fn):
-                mt2 = ph.get("MediaType") or ""
-                bt = ph.get("BusType") or ""
-                media = "NVMe SSD" if (mt2 == "SSD" and bt == "NVMe") else \
-                        ("SATA SSD" if mt2 == "SSD" else (mt2 or "HDD"))
-                break
-        if media in ("", "Unspecified", None):
-            media = "USB 存储" if "USB" in model.upper() else "本地磁盘"
-        disks.append({"letter": letter, "mount": p.mountpoint, "phys": phys_name,
-                      "model": model, "media": media})
-    s["disks"] = disks
+        no = owners.get(letter.upper(), -1)
+        hw = phys.get(no) or {}
+        model = (hw.get("FriendlyName") or "").strip()
+        out.append({"letter": letter, "mount": p.mountpoint,
+                    "phys": "PhysicalDrive%d" % no if no >= 0 else "",
+                    "model": model,
+                    "media": _media_label(hw) or ("USB 存储" if "USB" in model.upper() else "本地磁盘")})
+    return out
+
+
+def collect_static():
+    """面板"设备性能 / 系统信息"要的静态硬件：只在启动时取一次（要跑十来次 PowerShell）。"""
+    s = {}
+    s.update(_machine_info())
+    s.update(_cpu_info())
+    s.update(_mem_info())
+    s.update(_gpu_info())
+    s.update(_net_info())
+    s["disks"] = _disk_info()
     return s
 
 
+GPU_SMI_FIELDS = "utilization.gpu,memory.used,memory.total,clocks.sm"
+
+
 def sample_gpu():
-    """显卡占用 + 显存已用。先试 nvidia-smi（还能校正 Win32 里报错的显存），
-    否则一次 Get-Counter 同时取 3D 引擎占用与各适配器的 Dedicated Usage（已用显存）。"""
-    out = _ps("& nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total,clocks.sm "
-              "--format=csv,noheader,nounits", timeout=4)
-    if out and "," in out:
-        seg = [x.strip() for x in out.splitlines()[0].split(",")]
+    """显卡占用 + 显存已用。先试 nvidia-smi（顺带校正 Win32 里报错的显存总量），
+    没有它就用性能计数器：3D 引擎占用与各适配器的已用显存。"""
+    out = ps_text("& nvidia-smi --query-gpu=%s --format=csv,noheader,nounits" % GPU_SMI_FIELDS, 4)
+    row = out.splitlines()[0].strip() if out else ""
+    if "," in row:
+        vals = [v.strip() for v in row.split(",")]
         try:
-            if len(seg) > 2 and float(seg[2]) > 0:
-                state["stat"]["gpu_mem_total"] = round(float(seg[2]) / 1024.0, 1)
-            return {"util": float(seg[0]), "mem_used": round(float(seg[1]) / 1024.0, 2),
-                    "freq": float(seg[3]) if len(seg) > 3 else None, "ok": True}
-        except Exception:
-            pass
-    txt = _ps(
-        "$u = (Get-Counter '\\GPU Engine(*engtype_3D)\\Utilization Percentage' "
-        "-ErrorAction SilentlyContinue).CounterSamples | Measure-Object CookedValue -Sum; "
-        "$m = (Get-Counter '\\GPU Adapter Memory(*)\\Dedicated Usage' "
-        "-ErrorAction SilentlyContinue).CounterSamples | Measure-Object CookedValue -Sum; "
-        "'{0},{1}' -f $u.Sum, $m.Sum", timeout=8)
-    try:
-        u, mb = [float(x) for x in txt.split(",")[:2]]
-    except Exception:
-        u, mb = 0.0, 0.0
-    return {"util": min(100.0, u), "mem_used": round(mb / 2 ** 30, 2), "freq": None, "ok": False}
+            util, used = float(vals[0]), float(vals[1])
+            if len(vals) > 2 and float(vals[2]) > 0:
+                state["stat"]["gpu_mem_total"] = round(float(vals[2]) / 1024.0, 1)
+            return {"util": util, "mem_used": round(used / 1024.0, 2),
+                    "freq": float(vals[3]) if len(vals) > 3 else None, "ok": True}
+        except (ValueError, IndexError):
+            _warn_once("nvidia-smi 的输出看不懂：%s" % row[:120])
+    util, used = gpu_counters()
+    return {"util": util, "mem_used": used, "freq": None, "ok": False}
+
+
+def gpu_counters():
+    """(3D 引擎占用 %，已用显存 GB)：一次 Get-Counter 把所有采样投影成 Path/CookedValue，
+    归类求和放在 Python 这边（PowerShell 只出数，不做聚合）。取不到就 (0, 0)。
+
+    注意：脚本必须是**一条表达式**（ps_json 会把它整个包进括号转 JSON）—— 写成
+    "先赋值再管道"的语句表再包括号，PowerShell 会直接报"表达式中缺少右)"。"""
+    paths = (r"\GPU Engine(*engtype_3D)\Utilization Percentage",
+             r"\GPU Adapter Memory(*)\Dedicated Usage")
+    script = ("(Get-Counter -Counter @('%s','%s') -ErrorAction SilentlyContinue).CounterSamples "
+              "| Select-Object Path,CookedValue" % paths)
+    util, used = 0.0, 0.0
+    for r in ps_rows(script, 8):
+        name = (r.get("Path") or "").lower()
+        try:
+            v = float(r.get("CookedValue") or 0)
+        except (TypeError, ValueError):
+            continue
+        if "engtype_3d" in name:
+            util += v
+        elif "dedicated usage" in name:
+            used += v
+    return min(100.0, util), round(used / 2 ** 30, 2)
 
 
 def sample_disk_io():
@@ -1560,7 +1666,7 @@ def load_static():
 
 
 def slow_loop():
-    """显卡走 1.5 秒的慢循环（照搬参考的节奏）；硬盘计数器按需初始化后每轮采样。
+    """显卡走 1.5 秒的慢循环；硬盘计数器按需初始化后每轮采样。
 
     只有在有人要（面板设备页开着）时才跑：这一轮就是一次 PowerShell 启动（nvidia-smi 试一下、
     失败再 Get-Counter），没人看设备页时纯属白烧 CPU——它的开销还不算在采集端进程自己头上。
@@ -1578,24 +1684,28 @@ def slow_loop():
         time.sleep(SLOW_INTERVAL)
 
 
+def _chunks(seq, n):
+    """把序列切成每段 n 个：一条命令里塞太多进程 id 会顶到命令行长度上限。"""
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+
+
 def enrich(procs):
-    """进程显示名：exe 的描述优先，回落进程名；顺带取主窗口标题（缓存，只查新 pid）。"""
-    need = [p["pid"] for p in procs if p["pid"] not in _meta]
-    if need:
-        for i in range(0, len(need), 25):
-            ids = ",".join(str(x) for x in need[i:i + 25])
-            j = _ps_json("Get-Process -Id %s -ErrorAction SilentlyContinue | "
-                         "Select-Object Id,Description,MainWindowTitle" % ids, timeout=6)
-            for m in as_list(j):
-                if isinstance(m, dict) and m.get("Id") is not None:
-                    _meta[int(m["Id"])] = {"desc": m.get("Description") or "",
-                                           "title": m.get("MainWindowTitle") or ""}
-        for pid in need:
-            _meta.setdefault(pid, {"desc": "", "title": ""})
+    """进程显示名与主窗口标题：exe 的描述优先（"Google Chrome" 比 chrome.exe 好看），
+    取不到就退回进程名。查过的 pid 进 _meta 缓存，不再重复问 PowerShell。"""
+    fresh = [p["pid"] for p in procs if p["pid"] not in _meta]
+    for chunk in _chunks(fresh, 25):
+        rows = ps_rows("Get-Process -Id %s -ErrorAction SilentlyContinue | "
+                       "Select-Object Id,Description,MainWindowTitle"
+                       % ",".join(str(x) for x in chunk), 6)
+        for r in rows:
+            if isinstance(r, dict) and r.get("Id") is not None:
+                _meta[int(r["Id"])] = {"desc": r.get("Description") or "",
+                                       "title": r.get("MainWindowTitle") or ""}
     for p in procs:
-        m = _meta.get(p["pid"], {})
-        p["display"] = (m.get("desc") or p["name"].replace(".exe", "") or "未知").strip()
-        p["title"] = m.get("title") or ""
+        m = _meta.get(p["pid"]) or _meta.setdefault(p["pid"], {"desc": "", "title": ""})
+        p["display"] = (m["desc"] or p["name"].replace(".exe", "") or "未知").strip()
+        p["title"] = m["title"] or ""
 
 
 # ---------------- HTTP ----------------
@@ -1773,36 +1883,43 @@ def log(msg):
             pass
 
 
-def _selftest():
+def _wait_snapshot(tries=20, gap=0.4):
+    """等本地 /snapshot 出第一份快照。启动后静态硬件要跑几秒 PowerShell，所以是轮询不是一把。"""
     import urllib.request
-    data = None
-    for _ in range(20):
+    for _ in range(tries):
         try:
             with urllib.request.urlopen("http://127.0.0.1:%d/snapshot" % PORT, timeout=3) as r:
                 if r.status == 200:
-                    data = json.loads(r.read().decode("utf-8"))
-                    break
+                    return json.loads(r.read().decode("utf-8"))
         except Exception:
             pass
-        time.sleep(0.4)
-    if data is None:
-        ok, msg = False, "err=snapshot 未就绪"
+        time.sleep(gap)
+    return None
+
+
+def _selftest():
+    """启动自测：第一行 PASS/FAIL 是结论，第二行是给人看的读数，
+    写进 %TEMP%\\zmd_orb_selftest.txt 再抄一份进日志。"""
+    snap = _wait_snapshot()
+    if snap is None:
+        ok, line = False, "err=snapshot 未就绪"
     else:
-        mem = data.get("mem") or {}
-        ok = bool(data.get("live")) and mem.get("total_mb", 0) > 0
-        msg = "live=%s mem=%.1f/%.1fG %.1f%% commit=%.1f/%.1fG cpu=%.1f%% 硬缺页=%.0f/s 自动整理=%s" % (
-            data.get("live"), (mem.get("used_mb", 0)) / 1024, (mem.get("total_mb", 0)) / 1024,
-            mem.get("pct", 0), mem.get("committed_mb", 0) / 1024, mem.get("commit_limit_mb", 0) / 1024,
-            (data.get("cpu") or {}).get("util", 0),
-            data.get("hard_fault_rate") or 0,
-            "开" if (data.get("auto") or {}).get("enabled") else "关")
+        mem = snap.get("mem") or {}
+        cpu = snap.get("cpu") or {}
+        ok = bool(snap.get("live")) and (mem.get("total_mb") or 0) > 0
+        line = "live=%s mem=%.1f/%.1fG %.1f%% commit=%.1f/%.1fG cpu=%.1f%% 硬缺页=%.0f/s 自动整理=%s" % (
+            snap.get("live"), (mem.get("used_mb") or 0) / 1024, (mem.get("total_mb") or 0) / 1024,
+            mem.get("pct") or 0, (mem.get("committed_mb") or 0) / 1024,
+            (mem.get("commit_limit_mb") or 0) / 1024, cpu.get("util") or 0,
+            snap.get("hard_fault_rate") or 0,
+            "开" if (snap.get("auto") or {}).get("enabled") else "关")
     try:
         with open(os.path.join(os.environ.get("TEMP", "."), "zmd_orb_selftest.txt"),
                   "w", encoding="utf-8") as f:
-            f.write("%s\n%s\n" % ("PASS" if ok else "FAIL", msg))
-    except Exception:
-        pass
-    log("[采集端] selftest %s %s" % ("PASS" if ok else "FAIL", msg))
+            f.write("%s\n%s\n" % ("PASS" if ok else "FAIL", line))
+    except Exception as e:
+        log("[采集端] 写自测结果失败：%s" % e)
+    log("[采集端] selftest %s %s" % ("PASS" if ok else "FAIL", line))
 
 
 def main(gui=True, selftest=False, clean_now=None, out_path=None, kill_now=None, kill_tree=False):

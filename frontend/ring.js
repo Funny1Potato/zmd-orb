@@ -1,8 +1,8 @@
-/* 环形几何 / 配色 / 粒子团 —— 从 zmd-manager（终末地管理器）移植，参数按球的尺寸缩小。
+/* 环形几何 / 配色 / 粒子团 —— 本项目的浏览器预览版，参数与壳里那份（orb/BallVisual.cs）一一对应。
  *
- * 角度口径（与 zmd 一致）：0° = 12 点方向，顺时针为正；弧长 > 180° 时置 large-arc 标志。
- * 配色也沿用 zmd：灰衬环 #d3d3ce / 淡黄轨道 #f2edc4 / 亮黄进度弧 #ffe23d / 内盘 #ededea
- * 装饰弧取真正的中低明色：左琥珀 #ecb063 / 右青蓝 #7fb2cc。
+ * 配色取自《明日方舟：终末地》协议核心电量面板那一套：灰衬环 #d3d3ce / 淡黄轨道 #f2edc4 /
+ * 亮黄进度弧 #ffe23d / 内盘 #ededea；装饰弧用真正的中低明色 —— 左琥珀 #ecb063、右青蓝 #7fb2cc。
+ * 角度口径：0° = 12 点方向，顺时针为正；弧长 > 180° 时置 large-arc 标志。
  */
 const RING_NS = 'http://www.w3.org/2000/svg';
 
@@ -10,14 +10,14 @@ const RING = {
   size: 160,          // 球窗口边长
   cx: 80, cy: 80,
   r: 52,              // 电量环半径
-  wRail: 9,           // 灰衬环线宽（比轨道宽，外露一圈边，同 zmd 的 24/18 比例）
+  wRail: 9,           // 灰衬环线宽（比轨道宽一点，外露一圈边）
   wTrack: 6.5,        // 轨道 / 进度弧线宽
-  rDeco: 70,          // 装饰弧半径（在环外侧，同 zmd 的 202/150 比例）
+  rDeco: 70,          // 装饰弧半径（在环外侧，约 1.35 倍环半径）
   wDeco: 9.7,
   rDisc: 43,          // 内盘半径（粒子团背景）
   canvas: 104,        // 粒子团画布边长（CSS 像素）
-  particles: 120,     // zmd 是 650/290px，按面积比缩到约 120
-  fps: 30,            // zmd 全速 rAF（开窗才看）；球常驻，限 30fps
+  particles: 120,     // 粒子数（按内盘面积定的密度）
+  fps: 30,            // 这个页面只用来调色；壳里是常驻的，限 30fps
   colorRail: '#d3d3ce',
   colorOutline: '#9a9a94',   // 描边色（比 colorRail 深一档：球浮在任意桌面内容上，浅灰会看不清）
   outline: 1,                // 是否给主环与装饰弧整圈描边
@@ -33,23 +33,35 @@ const RING = {
   glow: 'drop-shadow(0 0 7px rgba(255,224,70,.5))',
 };
 
-function polar(cx, cy, r, deg) {
-  const a = (deg - 90) * Math.PI / 180;
-  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+/* 圆上取点：口径是"0° = 12 点方向、顺时针为正"，直接按 sin/cos 组合写即可 ——
+   等价于"先把角度减 90° 再取 cos/sin"，但少一步。 */
+const toRad = deg => (deg * Math.PI) / 180;
+
+/* Halton 低差异序列的第 n 项（给定进制）。粒子团用它撒点：u = halton(i,2) 定纬度、
+   v = halton(i,3) 定经度 —— 均匀，且不像等分角的螺旋那样留出条纹感。 */
+function halton(n, b) {
+  let f = 1, r = 0;
+  while (n > 0) { f /= b; r += f * (n % b); n = Math.floor(n / b); }
+  return r;
 }
 
-function arcPath(cx, cy, r, s, e) {
-  if (e < s) e += 360;
-  const large = (e - s) > 180 ? 1 : 0;
-  const p1 = polar(cx, cy, r, s), p2 = polar(cx, cy, r, e);
-  return `M ${p1[0]} ${p1[1]} A ${r} ${r} 0 ${large} 1 ${p2[0]} ${p2[1]}`;
+function pointOn(cx, cy, r, deg) {
+  const t = toRad(deg);
+  return [cx + r * Math.sin(t), cy - r * Math.cos(t)];
+}
+
+/* 一段弧的 path。to 小于 from 时按"跨过 12 点"补一圈；弧长超过 180° 必须置 large-arc 标志，
+   否则 SVG 会挑短的那条弧来画。 */
+function arcD(cx, cy, r, from, to) {
+  const sweep = to < from ? to + 360 : to;
+  const a = pointOn(cx, cy, r, from), b = pointOn(cx, cy, r, sweep);
+  const large = (sweep - from) > 180 ? 1 : 0;
+  return `M ${a[0]} ${a[1]} A ${r} ${r} 0 ${large} 1 ${b[0]} ${b[1]}`;
 }
 
 /** 占用越高越警示：<70% 亮黄、<88% 琥珀、否则橙红 */
 function arcColor(pct) {
-  if (pct < 70) return RING.colorArc;
-  if (pct < 88) return RING.colorArcMid;
-  return RING.colorArcHigh;
+  return pct < 70 ? RING.colorArc : (pct < 88 ? RING.colorArcMid : RING.colorArcHigh);
 }
 
 /** 在给定 <svg> 上搭出电量环，返回操作句柄。装饰弧是固定不动的，只有 #arc 会变。 */
@@ -65,20 +77,23 @@ function buildRing(svg, opts) {
     svg.appendChild(n);
     return n;
   };
-  /* 描边：主环与两条装饰弧都描一圈。做法是"在底色下面再画一道更粗的同形描边"。
-     装饰弧两端保持平头棱角（不圆头）——所以描边不是靠圆头包住端面，而是把这层
-     描边在角度上朝两端各外延 capExt（＝描边厚度折算成的角度），端面于是被平直地描上。 */
+  /* 描边：主环与两条装饰弧都描一圈，做法是在底色下面再画一道更粗的同形弧。
+     装饰弧两端是平头棱角（不圆头），圆头包不住端面，所以让描边这层在角度上朝两端各外延
+     capDeg（＝描边厚度折算成的角度），端面就被平直地描上了。 */
   const ow = o.outlineW;
   const useOutline = o.outline !== 0;
-  const capExt = (ow * 180) / (Math.PI * o.rDeco);
+  const capDeg = (ow * 180) / (Math.PI * o.rDeco);
   const deco = (from, to, color) => {
+    const layers = [{ stroke: color, width: o.wDeco, from: from, to: to, opacity: '.95' }];
     if (useOutline) {
-      const under = el('path', { fill: 'none', stroke: o.colorOutline,
-                                 'stroke-width': o.wDeco + 2 * ow });
-      under.setAttribute('d', arcPath(cx, cy, o.rDeco, from - capExt, to + capExt));
+      layers.unshift({ stroke: o.colorOutline, width: o.wDeco + 2 * ow,
+                       from: from - capDeg, to: to + capDeg });
     }
-    const p = el('path', { fill: 'none', stroke: color, 'stroke-width': o.wDeco, opacity: '.95' });
-    p.setAttribute('d', arcPath(cx, cy, o.rDeco, from, to));
+    for (const L of layers) {
+      const p = el('path', { fill: 'none', stroke: L.stroke, 'stroke-width': L.width });
+      p.setAttribute('d', arcD(cx, cy, o.rDeco, L.from, L.to));
+      if (L.opacity) p.setAttribute('opacity', L.opacity);
+    }
   };
   deco(270, 360, o.colorDecoLeft);                       // 9 点 → 12 点（左上）
   deco(90, 180, o.colorDecoRight);                       // 3 点 → 6 点（右下）
@@ -100,7 +115,7 @@ function buildRing(svg, opts) {
       const p = Math.max(0, Math.min(100, pct));
       if (Math.abs(p - last) < 0.05) return;
       last = p;
-      arc.setAttribute('d', arcPath(cx, cy, o.r, 0, Math.max(0.5, Math.min(359.5, p * 3.6))));
+      arc.setAttribute('d', arcD(cx, cy, o.r, 0, Math.max(0.5, Math.min(359.5, p * 3.6))));
       arc.setAttribute('stroke', arcColor(p));
     },
   };
@@ -118,9 +133,10 @@ class Blob {
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.n = this.o.particles;
     this.pts = [];
-    for (let i = 0; i < this.n; i++) {              // 斐波那契球面均匀撒点
-      const y = 1 - (i / (this.n - 1)) * 2, r = Math.sqrt(Math.max(0, 1 - y * y)), th = i * 2.39996;
-      this.pts.push({ x: Math.cos(th) * r, y, z: Math.sin(th) * r, ph: Math.random() * Math.PI * 2 });
+    for (let i = 0; i < this.n; i++) {              // Halton 低差异序列撒在球面上（与壳里那份同一个撒法）
+      const u = halton(i + 1, 2), v = halton(i + 1, 3);
+      const y = 1 - 2 * u, ring = Math.sqrt(Math.max(0, 1 - y * y)), th = 2 * Math.PI * v;
+      this.pts.push({ x: ring * Math.cos(th), y, z: ring * Math.sin(th), ph: Math.random() * Math.PI * 2 });
     }
     this.t = Math.random() * 100;
     this.squish = 1;      // 整理动画的收缩比
@@ -167,21 +183,26 @@ class Blob {
   _draw(dt) {
     this.t += dt;
     const { ctx, o } = this;
-    const S = o.canvas;
+    const S = o.canvas, c = S / 2;
     ctx.clearRect(0, 0, S, S);
-    const c = S / 2;
-    const breath = 0.5 + 0.5 * Math.sin(this.t * 0.9);
-    const rot = this.t * 0.12, cs = Math.cos(rot), sn = Math.sin(rot);
+    // 半径以内盘为基准（最大半径正好等于内盘半径），画布比它大只是留白
+    const inflate = 0.79 + 0.12 * (0.5 + 0.5 * Math.sin(this.t * 0.9)) * this.amp;
+    const spin = this.t * 0.12, cos = Math.cos(spin), sin = Math.sin(spin);
     for (const p of this.pts) {
-      const n = Math.sin(3.1 * p.x + this.t * 0.7 + p.ph) * Math.sin(2.7 * p.y - this.t * 0.5) * Math.sin(2.3 * p.z + this.t * 0.6);
-      // 以"内盘半径"为基准（zmd 里 blob 最大半径正好等于内盘 r=126），画布更大只是留白
-      const R = o.rDisc * (0.79 + 0.12 * breath * this.amp + 0.09 * n) * this.squish;
-      const x = p.x * cs + p.z * sn, z = -p.x * sn + p.z * cs, y = p.y;
-      const depth = (z + 1) / 2;
+      const r = o.rDisc * this.squish * (inflate + 0.09 * this._puff(p));
+      const x = p.x * cos + p.z * sin;                 // 绕竖轴自转
+      const depth = (p.z * cos - p.x * sin + 1) / 2;   // 0 = 背面，1 = 正面
       ctx.beginPath();
-      ctx.arc(c + x * R, c + y * R, 0.6 + depth * 1.0, 0, 6.2832);
+      ctx.arc(c + x * r, c + p.y * r, 0.6 + depth * 1.0, 0, 6.2832);
       ctx.fillStyle = `rgba(${o.blobRGB},${(0.10 + depth * 0.40).toFixed(3)})`;
       ctx.fill();
     }
+  }
+
+  /** 三层正弦相乘当噪声（与壳里那份同一套），让每个点的半径无规则起伏。 */
+  _puff(p) {
+    return Math.sin(3.1 * p.x + this.t * 0.7 + p.ph)
+         * Math.sin(2.7 * p.y - this.t * 0.5)
+         * Math.sin(2.3 * p.z + this.t * 0.6);
   }
 }

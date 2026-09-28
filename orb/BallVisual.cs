@@ -69,12 +69,13 @@ sealed class BallVisual : FrameworkElement
     public BallVisual()
     {
         var rnd = new Random();
-        for (int i = 0; i < Ring.Particles; i++)      // 斐波那契球面均匀撒点
+        for (int i = 0; i < Ring.Particles; i++)      // Halton 低差异序列撒在球面上（与面板那个粒子团同一套撒法）
         {
-            double y = 1 - i / (double)(Ring.Particles - 1) * 2;
-            double r = Math.Sqrt(Math.Max(0, 1 - y * y));
-            double th = i * 2.39996;
-            _pts[i] = new P { X = Math.Cos(th) * r, Y = y, Z = Math.Sin(th) * r };
+            double u = Ring.Halton(i + 1, 2), v = Ring.Halton(i + 1, 3);
+            double y = 1 - 2 * u;
+            double rr = Math.Sqrt(Math.Max(0, 1 - y * y));
+            double th = 2 * Math.PI * v;
+            _pts[i] = new P { X = rr * Math.Cos(th), Y = y, Z = rr * Math.Sin(th) };
             _phase[i] = rnd.NextDouble() * Math.PI * 2;
         }
         _t = rnd.NextDouble() * 100;
@@ -354,25 +355,28 @@ sealed class BallVisual : FrameworkElement
             glow[i] = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, start, head + DecoGlowOver[i]);
     }
 
+    /// <summary>球心的粒子团：半径随"呼吸 × 整理手势"与三层正弦噪声起伏，绕竖轴缓慢自转。
+    /// 半径以**内盘**为基准（常态 0.79×RDisc），所以盘缘虚化怎么调都不影响它的相对大小。</summary>
     void DrawBlob(DrawingContext dc)
     {
-        double breath = 0.5 + 0.5 * Math.Sin(_t * 0.9);
-        double rot = _t * 0.12, cs = Math.Cos(rot), sn = Math.Sin(rot);
+        double inflate = 0.79 + 0.12 * (0.5 + 0.5 * Math.Sin(_t * 0.9)) * _amp;
+        double spin = _t * 0.12, cos = Math.Cos(spin), sin = Math.Sin(spin);
         for (int i = 0; i < _pts.Length; i++)
         {
             var p = _pts[i];
-            double n = Math.Sin(3.1 * p.X + _t * 0.7 + _phase[i])
-                     * Math.Sin(2.7 * p.Y - _t * 0.5)
-                     * Math.Sin(2.3 * p.Z + _t * 0.6);
-            double r = Ring.RDisc * (0.79 + 0.12 * breath * _amp + 0.09 * n) * _squish;
-            double x = p.X * cs + p.Z * sn;
-            double z = -p.X * sn + p.Z * cs;
-            double depth = (z + 1) / 2;
-            int b = (int)Math.Round(depth * Buckets);
+            double r = Ring.RDisc * _squish * (inflate + 0.09 * Puff(p, _phase[i]));
+            double x = p.X * cos + p.Z * sin;                  // 绕竖轴自转
+            double depth = (p.Z * cos - p.X * sin + 1) / 2;    // 0 = 背面，1 = 正面
             double rad = 0.6 + depth;
-            dc.DrawEllipse(_blobBrush[b], null, new Point(Ring.Cx + x * r, Ring.Cy + p.Y * r), rad, rad);
+            dc.DrawEllipse(_blobBrush[(int)Math.Round(depth * Buckets)], null,
+                           new Point(Ring.Cx + x * r, Ring.Cy + p.Y * r), rad, rad);
         }
     }
+
+    /// <summary>三层正弦相乘当噪声（与面板粒子团同一套），让每个点的半径无规则起伏。</summary>
+    double Puff(in P p, double phase) => Math.Sin(3.1 * p.X + _t * 0.7 + phase)
+                                       * Math.Sin(2.7 * p.Y - _t * 0.5)
+                                       * Math.Sin(2.3 * p.Z + _t * 0.6);
 
     static Pen Pen(Color c, double w, double opacity = 1.0, bool round = false)
     {
