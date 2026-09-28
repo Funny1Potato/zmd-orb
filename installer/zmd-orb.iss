@@ -3,7 +3,7 @@
 ; 自包含发布（zmd-orb.exe 里已带 .NET 运行时），backend.exe 是 PyInstaller 打的采集端。
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.0.1"
+  #define MyAppVersion "0.2.0"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "..\orb\bin\Release\net6.0-windows\publish"

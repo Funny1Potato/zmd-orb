@@ -19,7 +19,7 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <AssemblyTitle>终末地加速球</AssemblyTitle>
     <Product>终末地加速球</Product>
-    <Version>0.0.1</Version>
+    <Version>0.2.0</Version>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
 
