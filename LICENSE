@@ -24,5 +24,3 @@ SOFTWARE.
 
 第三方组件许可：界面图标取自 Lucide 图标集（ISC 许可，其中衍生自 Feather 的部分为 MIT），
 许可全文与署名随本仓库一起分发，见 THIRD-PARTY-LICENSES.txt。
-本项目与 zmd-manager 的起步关系、以及"沿用的代码已全部重写为独立实现"的核对与验证记录，
-见 THIRD-PARTY-NOTICES.md。

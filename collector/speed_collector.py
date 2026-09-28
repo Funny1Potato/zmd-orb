@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import psutil
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 仓库根（前端所在处）
-PORT = 8910          # 避开 zmd-manager 的 8899，两个工具可同时运行
+PORT = 8910          # 本地 API 端口（避开常见工具占用的那几个，方便同时开）
 INTERVAL = 1.0       # 球是常驻的，1s 足够；进程列表留到面板打开时再采（M3）
 THROTTLE = 30.0      # 手动整理后的冷却（秒）；壳那边只是 UI 提示，真正拦截在这里
 SETTLE = 1.0         # 整理后等列表稳定再测"后"
@@ -1685,16 +1685,21 @@ def slow_loop():
 
 
 def _chunks(seq, n):
-    """把序列切成每段 n 个：一条命令里塞太多进程 id 会顶到命令行长度上限。"""
+    """把序列切成每段 n 个。"""
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
 
 
 def enrich(procs):
     """进程显示名与主窗口标题：exe 的描述优先（"Google Chrome" 比 chrome.exe 好看），
-    取不到就退回进程名。查过的 pid 进 _meta 缓存，不再重复问 PowerShell。"""
+    取不到就退回进程名。查过的 pid 进 _meta 缓存，不再重复问 PowerShell。
+
+    按 60 个一批问：这条开销全在"每次都要新起一个 PowerShell"（约 1.2 秒/次）上，
+    而 60 个 id 拼出来的命令行才几百字符，离长度上限差得远。批小（早先是 25）会让第一次
+    采样白等好几秒 —— 面板刚打开时那阵"应用列表空着"主要就是它。
+    """
     fresh = [p["pid"] for p in procs if p["pid"] not in _meta]
-    for chunk in _chunks(fresh, 25):
+    for chunk in _chunks(fresh, 60):
         rows = ps_rows("Get-Process -Id %s -ErrorAction SilentlyContinue | "
                        "Select-Object Id,Description,MainWindowTitle"
                        % ",".join(str(x) for x in chunk), 6)
@@ -1744,6 +1749,10 @@ class Handler(BaseHTTPRequestHandler):
         want 缺省是 procs,dev —— 手工 curl 与 dev.html 照旧拿全量；壳这边球/托盘传 none、
         面板按当前页传 procs 或 dev。裁掉的不只是网络流量：没人要时采样线程连进程都不枚举，
         慢循环也不去拉那个 PowerShell。
+
+        **这里绝不做重活**：续期之后采样线程下一轮（≤1 秒）就会去采。早先在这里同步现采一帧进程，
+        而第一次采要枚举几百个进程、逐个问 PowerShell 要显示名（实测约 10 秒），把壳的首帧请求
+        直接拖到超时 —— 表现是"采集端刚起来那阵，面板要空几十秒"。
         """
         want = ",".join(q.get("want") or ["procs,dev"]).lower()
         if want in ("none", "light", "0", "-"):
@@ -1751,8 +1760,6 @@ class Handler(BaseHTTPRequestHandler):
         now = time.time()
         if "procs" in want:
             state["want_procs_until"] = now + HEAVY_GRACE
-            if now - (state.get("procs_ts") or 0) > 1.5:
-                sample_procs()      # 面板刚打开：现采一帧，别让首屏空着
         if "dev" in want:
             state["want_dev_until"] = now + HEAVY_GRACE
         if want != state.get("_want_last"):

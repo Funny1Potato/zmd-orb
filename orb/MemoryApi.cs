@@ -16,7 +16,7 @@ sealed class MemSnapshot
     public bool Admin;
     public double HardFaultRate = double.NaN;      // 页/秒，≥0
 
-    // 设备页（照搬 zmd-manager 的字段）
+    // 设备页（字段与采集端快照同名）
     public CpuInfo Cpu = new();
     public GpuInfo Gpu = new();
     public MemInfo Mem = new();
@@ -104,10 +104,11 @@ sealed class AppMemRow : RowBase, ITrendRow
     public List<double> Hist { get; } = new();
     public List<double> Hist2 { get; } = new();
     public int HistTick { get; private set; }
-    // 应用内存页两条线都是"占某个总额的百分比"（类型相同）→ 共用一套纵轴
+    // 走势按**绝对容量**（GB）缩放：占用率相对物理内存、提交率相对提交上限，两条线的分母不同，
+    // 画在同一个 0~100% 轴上会误导（推入的值是 MemMb/1024 与 CommitMb/1024）
     public bool DualAxis => false;
-    public string AxisUnit1 => "%";
-    public string AxisUnit2 => "%";
+    public string AxisUnit1 => "GB";
+    public string AxisUnit2 => "GB";
 
     public void Push(double a, double b)
     {
@@ -130,6 +131,11 @@ sealed class DeviceRow : RowBase, ITrendRow
     public string Spec { get; set; } = "";
     public double Util { get; set; }              // 主指标（占用率）
     public double Linev { get; set; }             // 次指标（频率/显存/读写速率…按各自设备的真实单位）
+    // 走势图取的值：不填就用 Util / Linev。填了就表示"图上换一种量纲"——例如内存按**绝对容量**
+    // （GB）走而不是占用率：占用率相对物理内存、提交率相对提交上限，两者分母不同，
+    // 画在同一个比例轴上会让人误读（见"内存"那一行的初始化）
+    public double? Trend1 { get; set; }
+    public double? Trend2 { get; set; }
     public bool DualAxis { get; set; }            // 两条线类型不同 → 左右各一套纵轴
     public string AxisUnit1 { get; set; } = "%";
     public string AxisUnit2 { get; set; } = "%";
@@ -252,7 +258,7 @@ static class MemoryApi
                 s.AutoReason = Str(au, "reason");
             }
 
-            // 设备页（照搬 zmd-manager 的快照字段）
+            // 设备页（快照字段同名，键名就是采集端那一套）
             if (root.TryGetProperty("cpu", out var cp))
             {
                 s.Cpu = new CpuInfo

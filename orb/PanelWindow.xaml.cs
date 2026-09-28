@@ -562,7 +562,9 @@ public partial class PanelWindow : Window
         }
         foreach (var r in _memRows)
         {
-            r.Push(r.MemPct, r.CommitPct);
+            // 走势按绝对容量（GB）推点，与 AppMemRow 的 AxisUnit 一致：
+            // 占用率与提交率的分母不同，同一根比例轴上比不出"这个应用占了多大"
+            r.Push(r.MemMb / 1024, r.CommitMb / 1024);
             r.Notify();
         }
     }
@@ -632,6 +634,9 @@ public partial class PanelWindow : Window
                   + (!string.IsNullOrEmpty(mem.Speed) && mem.Speed != "—" ? " · " + mem.Speed : "")
                 : $"已用 {mem.UsedGb:F1} / {mem.TotalGb:F1} GB",
             Util = mem.Pct,
+            // 走势按**绝对容量**（GB）缩放，两条线都是 GB：占用率的分母是物理内存、提交率的分母是
+            // 提交上限，两种比例画在同一个 0~100% 轴上会误导（反馈要求按占用大小走）
+            Trend1 = mem.UsedGb, Trend2 = mem.CommittedGb, AxisUnit1 = "GB", AxisUnit2 = "GB",
             // 次指标：提交额度占用率（这才是会不会被打崩的指标）
             Linev = mem.CommitLimitGb > 0 ? mem.CommittedGb / mem.CommitLimitGb * 100 : mem.Pct,
             Cur1Lbl = "占用", Cur1Val = mem.Pct.ToString("F0") + "%",
@@ -741,7 +746,7 @@ public partial class PanelWindow : Window
         }
         foreach (var d in _devices)
         {
-            d.Push(d.Util, d.Linev);     // 主指标 + 次指标各推一个点
+            d.Push(d.Trend1 ?? d.Util, d.Trend2 ?? d.Linev);     // 主指标 + 次指标各推一个点（内存那行推的是 GB）
             d.Notify();
         }
     }

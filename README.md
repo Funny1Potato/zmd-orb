@@ -88,9 +88,8 @@ zmd-orb.exe --autostart on|off     改开机自启
 
 ## 设计参考与许可
 
-界面风格取自《明日方舟：终末地》协议核心电量面板；项目起步时参考了
-[zmd-manager（终末地管理器）](https://github.com/QinAnze/zmd-manager)，其中沿用的代码已全部重写为
-独立实现（核对与验证记录见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）。
+界面风格取自《明日方舟：终末地》协议核心电量面板；项目起步时基于
+[zmd-manager（终末地管理器）](https://github.com/QinAnze/zmd-manager)，其中沿用的代码已重写为独立实现。
 
 本项目以 **MIT 许可**发布，见 [LICENSE](LICENSE)；界面图标取自
 [Lucide](https://lucide.dev/)（ISC 许可），许可全文见 [THIRD-PARTY-LICENSES.txt](THIRD-PARTY-LICENSES.txt)。
