@@ -150,6 +150,10 @@ public partial class BallWindow : Window
                 _commitPct = 0;
             }
             if (!_busy) Render();
+            // 还没拿到真实数据时别按轻量档的 3 秒干等：壳刚起来时采集端要 1~2 秒才绑上端口，
+            // 那段时间两条计量条没有填充色（看起来就是"启动时装饰弧不显示"），
+            // 所以没数据就 1 秒重试，拿到真实快照再恢复成设置里的间隔。
+            _poll.Interval = TimeSpan.FromSeconds(_live ? UiSettings.BallPollSecs : 1.0);
         }
         finally { _polling = false; }
     }

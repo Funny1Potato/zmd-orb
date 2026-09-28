@@ -321,7 +321,10 @@ public partial class PanelWindow : Window
     {
         bool want = chkLite.IsChecked == true;
         (Application.Current as App)?.SetLite(want);      // 落盘 + 立刻生效（球/托盘两个右键菜单也走同一条路）
-        setHint.Text = want ? "已开轻量模式（球静止时不再重画）" : "已关轻量模式";
+        // 渲染方式跟着模式变（普通=硬件、轻量=软件），但它只能启动时定 —— 得提醒一句
+        bool needRestart = (Application.Current as App)?.SwApplied != UiSettings.SwRender;
+        setHint.Text = (want ? "已开轻量模式（球静止时不再重画）" : "已关轻量模式")
+                     + (needRestart ? $"；渲染要重启才切成{(UiSettings.SwRender ? "软件" : "硬件")}" : "");
         Poll();                       // 立刻按新设置重排一次（面板这边主要在下一轮生效）
     }
 

@@ -20,7 +20,14 @@ sealed class BallVisual : FrameworkElement
     const double RingTrackAlpha = 0.72;  // 主环未占用段（用户要求再实一点）
     const double BaseAlpha = 0.55;       // 底衬：浅色半透的"磨砂底托"
     const double OutlineAlpha = 0.80;    // 描边：深一档、几乎实色（底衬改白后描边不能再跟着白，否则轮廓糊掉）
-    const double ShadowShiftY = 1.2;     // 阴影往下偏一点，才像投影（不是均匀的描边）
+    const double ShadowShiftY = 2.4;     // 阴影往下偏一点，才像投影（不是均匀的描边）
+    static readonly Color ShadowRgb = Color.FromRgb(0x2f, 0x2f, 0x2c);   // 中性暗灰，不用描边那个暖灰
+    // 投影的软衰减：宽度（在描边之外再加的量）与透明度一一对应，从实到透共五圈
+    static readonly double[] ShadowW = { 1.5, 3.0, 5.0, 7.0, 9.5 };
+    static readonly double[] ShadowA = { 0.13, 0.095, 0.065, 0.04, 0.022 };
+
+    /// <summary>装饰弧的辉光比填充段多扫的角度：平头不变，但端头错开，光像是溢出去一点。</summary>
+    const double DecoGlowOver = 4.0;
 
     readonly P[] _pts = new P[Ring.Particles];
     readonly double[] _phase = new double[Ring.Particles];
@@ -28,14 +35,14 @@ sealed class BallVisual : FrameworkElement
 
     readonly Geometry _decoLeftBaseG, _decoLeftTrackG, _decoRightBaseG, _decoRightTrackG, _ringBaseG, _glowClip;
     readonly Pen _outlinePen, _decoLeftPen, _decoLeftTrack, _decoRightPen, _decoRightTrack, _trackPen;
-    readonly Pen _shadowNear, _shadowFar;
+    readonly Pen[] _shadow = new Pen[5];
     readonly Transform _shadowShift;
     readonly Pen[] _arcPen = new Pen[3], _glowNear = new Pen[3], _glowMid = new Pen[3], _glowFar = new Pen[3];
     readonly Pen[] _decoGlowNear = new Pen[2], _decoGlowMid = new Pen[2], _decoGlowFar = new Pen[2];
     readonly Brush _baseBrush, _discBrush, _frostDots;
     readonly Geometry _discG;
 
-    Geometry? _arc, _decoLeftFillG, _decoRightFillG;
+    Geometry? _arc, _decoLeftFillG, _decoRightFillG, _decoLeftGlowG, _decoRightGlowG;
     double _arcPct = double.NaN, _decoPct = double.NaN, _decoCommit = double.NaN;
     double _pct, _commitPct;
     double _t, _squish = 1, _amp = 1;
@@ -76,11 +83,10 @@ sealed class BallVisual : FrameworkElement
 
         _baseBrush = Freeze(new SolidColorBrush(Ring.Base) { Opacity = BaseAlpha });
         _outlinePen = Pen(Ring.Outline, Ring.OutlineW, OutlineAlpha);
-        /* 沿底衬轮廓再来两圈柔和的暗色（描边色、低透明度、宽度递减），整体向下偏一点点 ——
-           比一圈硬描边更有立体感（用户要求"加点阴影看看"）。画在底衬填充**之前**，
-           这样填充会把朝内的那半边盖掉，只留下朝外的柔影。 */
-        _shadowNear = Pen(Ring.Outline, Ring.OutlineW + 2.0, 0.16);
-        _shadowFar = Pen(Ring.Outline, Ring.OutlineW + 4.5, 0.08);
+        /* 投影：五圈从实到透的同心描边（宽度与透明度一一对应）+ 下偏 2.4 DIP，画在底衬填充之前，
+           朝内那半边被填充盖掉，只留朝外的渐隐。颜色用中性暗灰，不用描边那个暖灰。 */
+        for (int i = 0; i < _shadow.Length; i++)
+            _shadow[i] = Pen(ShadowRgb, Ring.OutlineW + ShadowW[i], ShadowA[i]);
         var shift = new TranslateTransform(0, ShadowShiftY);
         shift.Freeze();
         _shadowShift = shift;
@@ -127,21 +133,23 @@ sealed class BallVisual : FrameworkElement
         {
             _arcPen[i] = Pen(colors[i], Ring.WTrack, 1.0, round: true);
             // 原 SVG 是 drop-shadow(0 0 7px rgba(255,224,70,.5))：三层递减宽度的半透明描边近似这圈辉光
-            _glowNear[i] = Pen(colors[i], Ring.WTrack + 4, 0.26, round: true);
-            _glowMid[i] = Pen(colors[i], Ring.WTrack + 8, 0.13, round: true);
-            _glowFar[i] = Pen(colors[i], Ring.WTrack + 12, 0.06, round: true);
+            // （宽度 +5/+10/+16 保留，透明度按反馈再降一档：0.32/0.17/0.08 → 0.24/0.13/0.06）
+            _glowNear[i] = Pen(colors[i], Ring.WTrack + 5, 0.24, round: true);
+            _glowMid[i] = Pen(colors[i], Ring.WTrack + 10, 0.13, round: true);
+            _glowFar[i] = Pen(colors[i], Ring.WTrack + 16, 0.06, round: true);
         }
 
-        /* 两侧计量条的填充段也有辉光，但**不能照搬主环那套**：
-           1) 装饰弧两端是平头，辉光也得是平头——用圆头会在填充两端各多出一坨光；
-           2) 强度比主环弱一档（宽度 +3/+6/+9，透明度 0.16/0.08/0.04），
-              毕竟它们只是球侧边的两条细计量，抢了主环的亮度就不好看了。 */
+        /* 两侧计量条的填充段也有辉光，但不能照搬主环那套：
+           1) 装饰弧两端是平头，辉光也得是平头——用圆头会在两端各多出一坨光；
+           2) 宽度比主环收一档（+4/+7/+9），最外缘 79.35 DIP，留出余量不被裁；
+           3) 透明度不能比主环低太多：装饰弧的辉光色（#ecb063 / #7fb2cc）几乎就是它自己那条
+              浅色底槽（#f3d6b9 / #cbe0ed）的深色版，同色系上压 16% 等于看不见。 */
         var decoColors = new[] { Ring.DecoLeft, Ring.DecoRight };
         for (int i = 0; i < 2; i++)
         {
-            _decoGlowNear[i] = Pen(decoColors[i], Ring.WDeco + 3, 0.16);
-            _decoGlowMid[i] = Pen(decoColors[i], Ring.WDeco + 6, 0.08);
-            _decoGlowFar[i] = Pen(decoColors[i], Ring.WDeco + 9, 0.04);
+            _decoGlowNear[i] = Pen(decoColors[i], Ring.WDeco + 4, 0.21);
+            _decoGlowMid[i] = Pen(decoColors[i], Ring.WDeco + 7, 0.11);
+            _decoGlowFar[i] = Pen(decoColors[i], Ring.WDeco + 9, 0.05);
         }
 
         /* 辉光要裁掉主环内缘以内的部分：最外层描边是 52±9.25，会糊到内盘(43)与主环之间
@@ -211,11 +219,11 @@ sealed class BallVisual : FrameworkElement
         dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
         if (_decoLeftFillG != null)
         {
-            if (!lite)
+            if (!lite && _decoLeftGlowG != null)
             {
-                dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftFillG);
-                dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftFillG);
-                dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftFillG);
+                dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftGlowG);
+                dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftGlowG);
+                dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftGlowG);
             }
             dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
         }
@@ -223,11 +231,11 @@ sealed class BallVisual : FrameworkElement
         dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
         if (_decoRightFillG != null)
         {
-            if (!lite)
+            if (!lite && _decoRightGlowG != null)
             {
-                dc.DrawGeometry(null, _decoGlowFar[1], _decoRightFillG);
-                dc.DrawGeometry(null, _decoGlowMid[1], _decoRightFillG);
-                dc.DrawGeometry(null, _decoGlowNear[1], _decoRightFillG);
+                dc.DrawGeometry(null, _decoGlowFar[1], _decoRightGlowG);
+                dc.DrawGeometry(null, _decoGlowMid[1], _decoRightGlowG);
+                dc.DrawGeometry(null, _decoGlowNear[1], _decoRightGlowG);
             }
             dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
         }
@@ -257,13 +265,13 @@ sealed class BallVisual : FrameworkElement
         if (!lite) DrawBlob(dc);
     }
 
-    /// <summary>底衬的通用画法：[向下的柔影] → [浅色底衬 + 细描边]。
-    /// 柔影画在填充之前，朝内那半边会被填充盖掉，只留朝外的柔影。</summary>
+    /// <summary>底衬的通用画法：[向下的软投影（五圈衰减）] → [浅色底衬 + 细描边]。
+    /// 投影画在填充之前，朝内那半边会被填充盖掉，只留朝外的渐隐。</summary>
     void DrawBase(DrawingContext dc, Geometry geo)
     {
         dc.PushTransform(_shadowShift);
-        dc.DrawGeometry(null, _shadowFar, geo);
-        dc.DrawGeometry(null, _shadowNear, geo);
+        for (int i = _shadow.Length - 1; i >= 0; i--)     // 从最外（最透）往里画，叠出来才连续
+            dc.DrawGeometry(null, _shadow[i], geo);
         dc.Pop();
         dc.DrawGeometry(_baseBrush, _outlinePen, geo);
     }
@@ -278,7 +286,9 @@ sealed class BallVisual : FrameworkElement
     }
 
     /// <summary>两条装饰弧的填充段：从水平线（橙=9 点、蓝=3 点）起，按百分比涨到各自的 1/4 弧满量程。
-    /// 进度几乎没变就不重建几何；占比为 0 时整段不画（只留浅色底槽）。</summary>
+    /// 进度几乎没变就不重建几何；占比为 0 时整段不画（只留浅色底槽）。
+    /// 辉光画在**另一段更长的弧**上（末端多扫 DecoGlowOver）：平头保留，但端头不与填充段对齐，
+    /// 看着是光溢出去一点，而不是被刀切齐。</summary>
     void EnsureDeco()
     {
         double a = Math.Max(0, Math.Min(100, _pct));
@@ -286,10 +296,11 @@ sealed class BallVisual : FrameworkElement
         if (Math.Abs(a - _decoPct) < 0.05 && Math.Abs(b - _decoCommit) < 0.05) return;
         _decoPct = a;
         _decoCommit = b;
-        _decoLeftFillG = a <= 0.05 ? null
-            : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, 270 + Math.Max(0.5, a * 0.9));
-        _decoRightFillG = b <= 0.05 ? null
-            : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, 90 + Math.Max(0.5, b * 0.9));
+        double ea = 270 + Math.Max(0.5, a * 0.9), eb = 90 + Math.Max(0.5, b * 0.9);
+        _decoLeftFillG = a <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, ea);
+        _decoRightFillG = b <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, eb);
+        _decoLeftGlowG = a <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, ea + DecoGlowOver);
+        _decoRightGlowG = b <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, eb + DecoGlowOver);
     }
 
     void DrawBlob(DrawingContext dc)

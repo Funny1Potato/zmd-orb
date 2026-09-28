@@ -27,6 +27,10 @@ public partial class App : Application
     /// <summary>当前形态：ball = 桌面悬浮球（默认）；tray = 只在托盘画占用率圆环。</summary>
     public string Mode { get; private set; } = "ball";
 
+    /// <summary>本次进程**实际生效**的渲染方式。切换轻量模式会改变"该用哪个"，
+    /// 但渲染模式只能在启动时定 —— 面板据此提醒"要重启才切换"。</summary>
+    public bool SwApplied { get; private set; }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -40,9 +44,11 @@ public partial class App : Application
             if (e.Args[i] == "--swrender")
             {
                 // 只在启动时生效：换渲染模式会让 WPF 重建显示上下文，运行中改不可靠
-                UiSettings.SwRender = e.Args[i + 1] == "on";
+                string v = e.Args[i + 1];
+                UiSettings.SwMode = v is "on" or "off" ? v : "auto";
                 UiSettings.Save();
-                Diag.Log($"命令行：软件渲染 {(UiSettings.SwRender ? "on（下次启动生效）" : "off（下次启动生效）")}");
+                Diag.Log($"命令行：渲染方式 = {UiSettings.SwMode}"
+                         + $"（auto = 普通模式硬件、轻量模式软件；下次启动生效）");
                 Shutdown();
                 return;
             }
@@ -94,12 +100,14 @@ public partial class App : Application
         _backend = BackendProcess.Start();
 
         // 软件渲染必须在**建窗口之前**定下来（换渲染模式会让 WPF 重建显示上下文）。
-        // 实测能把那口按轮询次数灌起来的写合并池压到 0（见 README"面板的内存"一节旁的说明）。
+        // 默认 auto：普通模式走硬件（面板跟手），轻量模式走软件（实测写合并池从 48 MB 直接归 0）。
         if (UiSettings.SwRender)
             System.Windows.Media.RenderOptions.ProcessRenderMode =
                 System.Windows.Interop.RenderMode.SoftwareOnly;
-        Diag.Log($"渲染：{(UiSettings.SwRender ? "软件（SoftwareOnly）" : "硬件")} "
-                 + $"Tier={System.Windows.Media.RenderCapability.Tier >> 16}");
+        Diag.Log($"渲染：{(UiSettings.SwRender ? "软件（SoftwareOnly）" : "硬件")}"
+                 + $"（开关 {UiSettings.SwMode}，形态 {UiSettings.Mode}；设备 Tier="
+                 + $"{System.Windows.Media.RenderCapability.Tier >> 16}）");
+        SwApplied = UiSettings.SwRender;
         _ball = new BallWindow();
         // 面板不在这里构造：那棵视觉树（四页 + 六张卡 + 走势图）不打开就不该占内存，见 OpenPanel()
 

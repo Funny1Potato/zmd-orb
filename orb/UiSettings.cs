@@ -49,12 +49,16 @@ static class UiSettings
     /// 而内存占用率的整数显示本来十几秒才跳一次，1 秒的粒度是白花的。</summary>
     public static double BallPollSecs => Lite ? Math.Max(3.0, PollSecs) : PollSecs;
 
-    /// <summary>软件渲染（`RenderOptions.ProcessRenderMode = SoftwareOnly`）——**默认开**。
-    /// 实测（本机、轻量开、球模式）：写合并池从 48 MB 直接归 0，稳态私有 123 → 67 MB；
-    /// 面板开着时私有 177 → 63 MB，代价是面板每秒刷新的 CPU 从 3.3% 到 7.5% 单核。
-    /// 只在**启动时**生效——换渲染模式会让 WPF 重建显示上下文，运行中改不可靠，所以改了要重启。
-    /// `ui.json` 里没这个键时按"开"处理（老配置不会意外退回硬件）。</summary>
-    public static bool SwRender { get; set; } = true;
+    /// <summary>渲染方式开关："auto" | "on" | "off"。
+    /// auto = **普通模式走硬件渲染、轻量模式走软件渲染**（这就是默认）。
+    /// 软件渲染实测能把那口按轮询次数灌起来的写合并池直接归 0（稳态私有 123 → 67 MB），
+    /// 代价是大窗口高频重绘时 CPU 翻倍（面板开着 3.3% → 7.5% 单核）——
+    /// 所以只在"就是为了省内存"的轻量模式下默认用它。
+    /// 只在**启动时**生效：换渲染模式会让 WPF 重建显示上下文，运行中改不可靠。</summary>
+    public static string SwMode { get; set; } = "auto";
+
+    /// <summary>这次到底用不用软件渲染。</summary>
+    public static bool SwRender => SwMode == "on" || (SwMode == "auto" && Lite);
 
     sealed class Dto
     {
@@ -65,7 +69,9 @@ static class UiSettings
         public string mode { get; set; } = "ball";
         public bool tray_promoted { get; set; }
         public bool lite { get; set; }
-        public bool? swrender { get; set; }      // 可空：老配置里没这个键 → 按默认（开）处理
+        // 用 JsonElement 接：这个键历史上是 bool（true/false），现在是 string（auto/on/off），
+        // 直接声明成 string 会在读到老配置时抛异常、整个 Load 一起失败（其它设置全丢）
+        public JsonElement? swrender { get; set; }
     }
 
     public static void Load()
@@ -82,12 +88,28 @@ static class UiSettings
             Mode = d.mode == "tray" ? "tray" : "ball";
             TrayPromoted = d.tray_promoted;
             Lite = d.lite;
-            SwRender = d.swrender ?? true;      // 没写过这项的老配置 = 默认软件渲染
+            SwMode = NormSw(d.swrender);
         }
         catch (Exception e)
         {
             Diag.Log("读显示设置失败：" + e.Message);
         }
+    }
+
+    /// <summary>把 swrender 归一成 "auto"/"on"/"off"：老配置里它是 bool（true=on / false=off），
+    /// 没写过就是 auto。</summary>
+    static string NormSw(JsonElement? e)
+    {
+        if (e == null) return "auto";
+        var v = e.Value;
+        if (v.ValueKind == JsonValueKind.True) return "on";
+        if (v.ValueKind == JsonValueKind.False) return "off";
+        if (v.ValueKind == JsonValueKind.String)
+        {
+            string? s = v.GetString();
+            if (s == "on" || s == "off") return s;
+        }
+        return "auto";
     }
 
     public static void Save()
@@ -105,7 +127,7 @@ static class UiSettings
                     mode = Mode,
                     tray_promoted = TrayPromoted,
                     lite = Lite,
-                    swrender = SwRender,
+                    swrender = JsonSerializer.SerializeToElement(SwMode),
                 },
                 new JsonSerializerOptions { WriteIndented = true }));
         }
