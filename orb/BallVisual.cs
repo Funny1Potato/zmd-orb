@@ -26,23 +26,42 @@ sealed class BallVisual : FrameworkElement
     static readonly double[] ShadowW = { 1.5, 3.0, 5.0, 7.0, 9.5 };
     static readonly double[] ShadowA = { 0.13, 0.095, 0.065, 0.04, 0.022 };
 
-    /// <summary>装饰弧的辉光比填充段多扫的角度：平头不变，但端头错开，光像是溢出去一点。</summary>
-    const double DecoGlowOver = 4.0;
+    /* 装饰弧的末端原来有两处硬边（反馈"头部和辉光之间的分界太明显"）：
+       一是填充段的平头——一整块实色方块；二是辉光溢出段的末端——一刀切齐。
+       实测那两处的像素跳变各是 57 与 25 个 B 单位（都在 0.3 DIP 内），而这一段本该是渐隐的。
+       改法仍然不用渐变笔刷：填充段末端 DecoFade 度分 N 段递降透明度，三层辉光溢出长度各不相同
+       （越宽越淡的那层溢得越远），末端就成了错开的三级台阶。**平头保持不变**（用户明确要平头）。 */
+    const double DecoFade = 3.0;                              // 填充段末端收尾的长度（度；另受整条 25% 的上限约束）
+    // 收尾各段的透明度**取等差**（[0]＝实色段）：等差 → 相邻两级在像素上的落差也基本相等。
+    // 早先按等比降（0.95/0.80/0.66/0.52/0.38/0.24）算出来最后一级落差是前几级的两倍，
+    // 末端仍然看得出一下台阶。实测这档每级 ΔB≈12，整体是一条 4.6px 宽的连续渐变。
+    static readonly double[] DecoFadeA = { 0.95, 0.78, 0.60, 0.43, 0.26, 0.10 };
+    static readonly double[] DecoGlowW = { 4, 7, 9 };         // 辉光三层的加宽量（近/中/远）
+    static readonly double[] DecoGlowA = { 0.21, 0.11, 0.05 };
+    static readonly double[] DecoGlowOver = { 0.6, 2.4, 4.2 }; // 各层比填充段多扫的角度
+
+    /// <summary>内盘边缘虚化的起点（占盘半径的比例）：0.90 → 只有最后 10%（≈4 DIP / 5 物理像素）
+    /// 在渐隐。**这个数就是"虚边有多宽"的唯一旋钮**，越靠近 1 边越硬。</summary>
+    const double DiscEdgeFade = 0.90;
 
     readonly P[] _pts = new P[Ring.Particles];
     readonly double[] _phase = new double[Ring.Particles];
     readonly Brush[] _blobBrush = new Brush[Buckets + 1];
 
     readonly Geometry _decoLeftBaseG, _decoLeftTrackG, _decoRightBaseG, _decoRightTrackG, _ringBaseG, _glowClip;
-    readonly Pen _outlinePen, _decoLeftPen, _decoLeftTrack, _decoRightPen, _decoRightTrack, _trackPen;
+    readonly Pen _outlinePen, _decoLeftTrack, _decoRightTrack, _trackPen;
     readonly Pen[] _shadow = new Pen[5];
     readonly Transform _shadowShift;
     readonly Pen[] _arcPen = new Pen[3], _glowNear = new Pen[3], _glowMid = new Pen[3], _glowFar = new Pen[3];
-    readonly Pen[] _decoGlowNear = new Pen[2], _decoGlowMid = new Pen[2], _decoGlowFar = new Pen[2];
+    readonly Pen[] _decoFadeL = new Pen[DecoFadeA.Length], _decoFadeR = new Pen[DecoFadeA.Length];
+    readonly Pen[] _decoGlowL = new Pen[3], _decoGlowR = new Pen[3];   // [0]=近（窄而实）… [2]=远（宽而淡）
     readonly Brush _baseBrush, _discBrush, _frostDots;
-    readonly Geometry _discG;
+    readonly Geometry _dotClipG;
 
-    Geometry? _arc, _decoLeftFillG, _decoRightFillG, _decoLeftGlowG, _decoRightGlowG;
+    Geometry? _arc, _decoLeftFillG, _decoRightFillG;
+    readonly Geometry?[] _decoTailL = new Geometry?[DecoFadeA.Length - 1];
+    readonly Geometry?[] _decoTailR = new Geometry?[DecoFadeA.Length - 1];
+    readonly Geometry?[] _decoGlowGL = new Geometry?[3], _decoGlowGR = new Geometry?[3];
     double _arcPct = double.NaN, _decoPct = double.NaN, _decoCommit = double.NaN;
     double _pct, _commitPct;
     double _t, _squish = 1, _amp = 1;
@@ -90,30 +109,42 @@ sealed class BallVisual : FrameworkElement
         var shift = new TranslateTransform(0, ShadowShiftY);
         shift.Freeze();
         _shadowShift = shift;
-        _decoLeftPen = Pen(Ring.DecoLeft, Ring.WDeco, 0.95);
-        _decoRightPen = Pen(Ring.DecoRight, Ring.WDeco, 0.95);
         // 没占到的那一段：各自弧色的浅色版 + 半透明（壁纸透得上来，才是"没占到"的观感）
         _decoLeftTrack = Pen(Ring.DecoLeftTrack, Ring.WDeco, TrackAlpha);
         _decoRightTrack = Pen(Ring.DecoRightTrack, Ring.WDeco, TrackAlpha);
+        for (int i = 0; i < DecoFadeA.Length; i++)          // 填充段的实色段 + 末端收尾各段
+        {
+            _decoFadeL[i] = Pen(Ring.DecoLeft, Ring.WDeco, DecoFadeA[i]);
+            _decoFadeR[i] = Pen(Ring.DecoRight, Ring.WDeco, DecoFadeA[i]);
+        }
         // 主环：整圈底衬 + 整圈描边（同样是两个独立的东西）
         _ringBaseG = Ring.Annulus(Ring.Cx, Ring.Cy, Ring.R - Ring.WTrack / 2, Ring.R + Ring.WTrack / 2);
         _trackPen = Pen(Ring.Track, Ring.WTrack, RingTrackAlpha);   // 主环未占用段：半透明，但比两侧的条实一些
-        /* 中间的盘：浅色半透 + 一层细点纹理，做出"磨砂玻璃"的观感。
-           真正的背景模糊（DWM 亚克力）是按整窗矩形铺的，会把当初去掉的"泛底"请回来，
-           所以这里用"高光渐变 + 微点纹理"来近似磨砂，任意壁纸上都不会变成一块方雾。 */
+        /* 中间的盘：浅色高光渐变 + 一层更细的点纹理，做出"离焦的磨砂玻璃"观感。
+           透明度按 Ring.DiscAlpha 定，半径取包围盒的 **0.50 → 渐变的 1.0 正好落在盘缘**（r=43 DIP），
+           所以最后那一小段就是"边缘虚化"，宽度由 `DiscEdgeFade` 定（0.90 → 只有最后 4 DIP ≈ 5 像素）。
+           早先半径取 0.53 且末端还留着 31% 的 alpha，两个毛病一起犯：整块盘从 r≈24 就开始渐隐
+           （虚边 15~20 DIP，反馈"边缘模糊太多"），盘边又还剩一道硬边的圆边。
+           真正把背景模糊掉的方案不存在：分层窗口不吃 DWM 的亚克力（整窗矩形铺，会把当初
+           在 WebView2 上吃过的"泛底"请回来），所以这里用"盘缘渐隐 + 微点"近似。 */
         var frost = new RadialGradientBrush
         {
             GradientOrigin = new Point(0.42, 0.34),
-            Center = new Point(0.5, 0.46),
-            RadiusX = 0.68,
-            RadiusY = 0.68,
+            Center = new Point(0.5, 0.5),
+            RadiusX = 0.50,
+            RadiusY = 0.50,
         };
-        frost.GradientStops.Add(new GradientStop(Color.FromArgb(0x7a, 0xff, 0xff, 0xff), 0));
-        frost.GradientStops.Add(new GradientStop(Color.FromArgb(0x50, 0xf1, 0xf1, 0xed), 1));
+        byte A(double k) => (byte)Math.Round(255 * Ring.DiscAlpha * k);
+        double e0 = DiscEdgeFade, e1 = e0 + (1 - e0) * 0.6;   // 虚化段里再垫一档，收尾才像离焦不是一条直线
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(A(1.00), 0xff, 0xff, 0xff), 0));
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(A(0.97), 0xf6, 0xf6, 0xf2), 0.45));
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(A(0.90), 0xf2, 0xf2, 0xee), e0));
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(A(0.42), 0xef, 0xef, 0xea), e1));
+        frost.GradientStops.Add(new GradientStop(Color.FromArgb(0, 0xed, 0xed, 0xea), 1));
         frost.Freeze();
         _discBrush = frost;
 
-        var dotBrush = new SolidColorBrush(Ring.FrostDot) { Opacity = 0.10 };
+        var dotBrush = new SolidColorBrush(Ring.FrostDot) { Opacity = 0.05 };
         dotBrush.Freeze();
         var dots = new DrawingBrush
         {
@@ -125,8 +156,9 @@ sealed class BallVisual : FrameworkElement
         };
         dots.Freeze();
         _frostDots = dots;
-        _discG = new EllipseGeometry(new Point(Ring.Cx, Ring.Cy), Ring.RDisc, Ring.RDisc);
-        _discG.Freeze();
+        // 点纹理裁到"虚边起点以内"（比盘小 6 DIP）：盘缘已经渐隐，纹理要是跟着到边就留下一个"点状圆边"
+        _dotClipG = new EllipseGeometry(new Point(Ring.Cx, Ring.Cy), Ring.RDisc - 6, Ring.RDisc - 6);
+        _dotClipG.Freeze();
 
         var colors = new[] { Ring.ArcLow, Ring.ArcMid, Ring.ArcHigh };
         for (int i = 0; i < 3; i++)
@@ -145,11 +177,10 @@ sealed class BallVisual : FrameworkElement
            3) 透明度不能比主环低太多：装饰弧的辉光色（#ecb063 / #7fb2cc）几乎就是它自己那条
               浅色底槽（#f3d6b9 / #cbe0ed）的深色版，同色系上压 16% 等于看不见。 */
         var decoColors = new[] { Ring.DecoLeft, Ring.DecoRight };
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < DecoGlowW.Length; i++)
         {
-            _decoGlowNear[i] = Pen(decoColors[i], Ring.WDeco + 4, 0.21);
-            _decoGlowMid[i] = Pen(decoColors[i], Ring.WDeco + 7, 0.11);
-            _decoGlowFar[i] = Pen(decoColors[i], Ring.WDeco + 9, 0.05);
+            _decoGlowL[i] = Pen(decoColors[0], Ring.WDeco + DecoGlowW[i], DecoGlowA[i]);
+            _decoGlowR[i] = Pen(decoColors[1], Ring.WDeco + DecoGlowW[i], DecoGlowA[i]);
         }
 
         /* 辉光要裁掉主环内缘以内的部分：最外层描边是 52±9.25，会糊到内盘(43)与主环之间
@@ -214,40 +245,25 @@ sealed class BallVisual : FrameworkElement
         // （用户选的"外观也变"：一眼能看出轻量开着，顺带把常驻那点图形开销也去掉）
         bool lite = UiSettings.Lite;
 
+        /* 几何必须在**画之前**重建。以前这两行排在装饰弧与弧的绘制之后，于是每次"几何变了 + 这一帧才画"
+           都会晚一帧：填充段那一帧画不出来，要等下一次重画才出现。普通模式 30fps 连着重画看不出来，
+           轻量模式只有启动那一次绘制 —— 表现就是"轻量模式启动后装饰弧的占用条不显示，
+           点一次整理（动画里连续重画）才出来"（用户反馈）。 */
+        EnsureArc();
+        EnsureDeco();
+
         // 每条都先垫一层向下的柔影，再画底衬 + 细描边
-        DrawBase(dc, _decoLeftBaseG);
-        dc.DrawGeometry(null, _decoLeftTrack, _decoLeftTrackG);
-        if (_decoLeftFillG != null)
-        {
-            if (!lite && _decoLeftGlowG != null)
-            {
-                dc.DrawGeometry(null, _decoGlowFar[0], _decoLeftGlowG);
-                dc.DrawGeometry(null, _decoGlowMid[0], _decoLeftGlowG);
-                dc.DrawGeometry(null, _decoGlowNear[0], _decoLeftGlowG);
-            }
-            dc.DrawGeometry(null, _decoLeftPen, _decoLeftFillG);
-        }
-        DrawBase(dc, _decoRightBaseG);
-        dc.DrawGeometry(null, _decoRightTrack, _decoRightTrackG);
-        if (_decoRightFillG != null)
-        {
-            if (!lite && _decoRightGlowG != null)
-            {
-                dc.DrawGeometry(null, _decoGlowFar[1], _decoRightGlowG);
-                dc.DrawGeometry(null, _decoGlowMid[1], _decoRightGlowG);
-                dc.DrawGeometry(null, _decoGlowNear[1], _decoRightGlowG);
-            }
-            dc.DrawGeometry(null, _decoRightPen, _decoRightFillG);
-        }
+        DrawDeco(dc, lite, _decoLeftBaseG, _decoLeftTrackG, _decoLeftTrack,
+                 _decoFadeL, _decoLeftFillG, _decoTailL, _decoGlowGL, _decoGlowL);
+        DrawDeco(dc, lite, _decoRightBaseG, _decoRightTrackG, _decoRightTrack,
+                 _decoFadeR, _decoRightFillG, _decoTailR, _decoGlowGR, _decoGlowR);
 
         var c = new Point(Ring.Cx, Ring.Cy);
         DrawBase(dc, _ringBaseG);                                   // 主环：柔影 + 底衬 + 细描边
         dc.DrawEllipse(null, _trackPen, c, Ring.R, Ring.R);
         dc.DrawEllipse(_discBrush, null, c, Ring.RDisc, Ring.RDisc);
-        if (!lite) dc.DrawGeometry(_frostDots, null, _discG);   // 磨砂盘上的细点纹理（裁在盘内）
+        if (!lite) dc.DrawGeometry(_frostDots, null, _dotClipG);   // 磨砂盘上的细点纹理（裁在盘内）
 
-        EnsureArc();
-        EnsureDeco();
         if (_arc != null)
         {
             int ci = _arcPct < 70 ? 0 : _arcPct < 88 ? 1 : 2;
@@ -263,6 +279,22 @@ sealed class BallVisual : FrameworkElement
         }
 
         if (!lite) DrawBlob(dc);
+    }
+
+    /// <summary>一侧装饰弧的画法：柔影 + 底衬/描边 → 底槽 → （非轻量）三层辉光 → 实色段 → 收尾各段。
+    /// 辉光从最外（最淡）往里叠，末端才与填充段自然接上。</summary>
+    void DrawDeco(DrawingContext dc, bool lite, Geometry baseG, Geometry trackG, Pen track,
+                  Pen[] fade, Geometry? fill, Geometry?[] tail, Geometry?[] glowG, Pen[] glow)
+    {
+        DrawBase(dc, baseG);
+        dc.DrawGeometry(null, track, trackG);
+        if (fill == null) return;                         // 占用为 0：只留浅色底槽
+        if (!lite)
+            for (int i = glowG.Length - 1; i >= 0; i--)
+                if (glowG[i] != null) dc.DrawGeometry(null, glow[i], glowG[i]);
+        dc.DrawGeometry(null, fade[0], fill);
+        for (int i = 0; i < tail.Length; i++)
+            if (tail[i] != null) dc.DrawGeometry(null, fade[i + 1], tail[i]);
     }
 
     /// <summary>底衬的通用画法：[向下的软投影（五圈衰减）] → [浅色底衬 + 细描边]。
@@ -285,10 +317,8 @@ sealed class BallVisual : FrameworkElement
         _arc = Ring.Arc(Ring.Cx, Ring.Cy, Ring.R, 0, Math.Max(0.5, Math.Min(359.5, p * 3.6)));
     }
 
-    /// <summary>两条装饰弧的填充段：从水平线（橙=9 点、蓝=3 点）起，按百分比涨到各自的 1/4 弧满量程。
-    /// 进度几乎没变就不重建几何；占比为 0 时整段不画（只留浅色底槽）。
-    /// 辉光画在**另一段更长的弧**上（末端多扫 DecoGlowOver）：平头保留，但端头不与填充段对齐，
-    /// 看着是光溢出去一点，而不是被刀切齐。</summary>
+    /// <summary>两条装饰弧的几何：从水平线（橙=9 点、蓝=3 点）起，按百分比涨到各自的 1/4 弧满量程。
+    /// 进度几乎没变就不重建几何；占比为 0 时整段不画（只留浅色底槽）。</summary>
     void EnsureDeco()
     {
         double a = Math.Max(0, Math.Min(100, _pct));
@@ -296,11 +326,32 @@ sealed class BallVisual : FrameworkElement
         if (Math.Abs(a - _decoPct) < 0.05 && Math.Abs(b - _decoCommit) < 0.05) return;
         _decoPct = a;
         _decoCommit = b;
-        double ea = 270 + Math.Max(0.5, a * 0.9), eb = 90 + Math.Max(0.5, b * 0.9);
-        _decoLeftFillG = a <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, ea);
-        _decoRightFillG = b <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, eb);
-        _decoLeftGlowG = a <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 270, ea + DecoGlowOver);
-        _decoRightGlowG = b <= 0.05 ? null : Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, 90, eb + DecoGlowOver);
+        EnsureDecoSide(270, a, ref _decoLeftFillG, _decoTailL, _decoGlowGL);
+        EnsureDecoSide(90, b, ref _decoRightFillG, _decoTailR, _decoGlowGR);
+    }
+
+    /// <summary>一侧的实色段 / 收尾段 / 三层辉光（start = 270 橙、90 蓝）。
+    /// 收尾段把末端那几度分成 N 段递降透明度；三层辉光各自多扫不同角度 → 末端的硬切错开成台阶。</summary>
+    static void EnsureDecoSide(double start, double pct, ref Geometry? fill, Geometry?[] tail, Geometry?[] glow)
+    {
+        fill = null;
+        for (int i = 0; i < tail.Length; i++) tail[i] = null;
+        for (int i = 0; i < glow.Length; i++) glow[i] = null;
+        if (pct <= 0.05) return;
+        double span = Math.Max(0.5, pct * 0.9);            // 满量程 90°
+        double head = start + span;
+        double fade = Math.Min(DecoFade, span * 0.25);     // 收尾长度（短弧上留出实色段，别整条都发虚）
+        double step = fade / tail.Length;
+        double solidTo = head - fade;
+        if (solidTo - start >= 0.5)
+            fill = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, start, solidTo);
+        for (int i = 0; i < tail.Length; i++)
+        {
+            double f0 = solidTo + step * i;
+            tail[i] = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, f0, f0 + step);
+        }
+        for (int i = 0; i < glow.Length; i++)
+            glow[i] = Ring.Arc(Ring.Cx, Ring.Cy, Ring.RDeco, start, head + DecoGlowOver[i]);
     }
 
     void DrawBlob(DrawingContext dc)

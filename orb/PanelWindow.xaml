@@ -751,19 +751,19 @@
                 <WrapPanel Orientation="Horizontal" Margin="0,8,0,0">
                   <TextBlock Text="综合分母" Style="{StaticResource MiniLbl}" Margin="0,0,5,0"/>
                   <TextBox x:Name="setMaxOcc" Style="{StaticResource MiniBox}" Width="70"
-                           ToolTip="综合占用 100% 对应多少 MB（默认 325799）；0 = 跟随提交额度上限"/>
+                           ToolTip="综合占用 100% 对应多少 MB；0 = 跟随提交额度上限"/>
                   <TextBlock Text="MB" Style="{StaticResource MiniLbl}"/>
                   <TextBlock Text="权重 CPU" Style="{StaticResource MiniLbl}"
-                             ToolTip="综合占用 =（权重CPU×CPU占用率 + 权重内存×内存占用率）÷ 两权重之和"/>
+                             ToolTip="CPU 占用率在综合占用里的比重"/>
                   <TextBox x:Name="setWCpu" Style="{StaticResource MiniBox}" Width="44"
-                           ToolTip="综合占用里 CPU 占用率的权重（默认 0.4；只影响与内存的相对比例）"/>
+                           ToolTip="CPU 占用率的权重（只影响它与内存的相对比例）"/>
                   <TextBlock Text="权重 内存" Style="{StaticResource MiniLbl}"
-                             ToolTip="综合占用 =（权重CPU×CPU占用率 + 权重内存×内存占用率）÷ 两权重之和"/>
+                             ToolTip="内存占用率在综合占用里的比重"/>
                   <TextBox x:Name="setWMem" Style="{StaticResource MiniBox}" Width="44"
-                           ToolTip="综合占用里 内存占用率的权重（默认 0.6；只影响与 CPU 的相对比例）"/>
+                           ToolTip="内存占用率的权重（只影响它与 CPU 的相对比例）"/>
                   <TextBlock Text="面板刷新" Style="{StaticResource MiniLbl}"/>
                   <TextBox x:Name="setPoll" Style="{StaticResource MiniBox}" Width="44"
-                           ToolTip="面板每秒轮询几次（秒）"/>
+                           ToolTip="面板多久刷新一次"/>
                   <TextBlock Text="秒" Style="{StaticResource MiniLbl}"/>
                   <TextBlock Text="应用概况" Style="{StaticResource MiniLbl}"/>
                   <TextBox x:Name="setAppLimit" Style="{StaticResource MiniBox}" Width="44"
@@ -781,20 +781,22 @@
                   <TextBlock Text="秒" Style="{StaticResource MiniLbl}"/>
                   <CheckBox x:Name="chkAutostart" Content="开机自启" FontSize="12"
                             Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
-                            Margin="4,0,0,0" Click="Autostart_Click"
-                            ToolTip="写 HKCU 的 Run 键（不需要管理员）。启动时用哪套形态，跟着上次用的走"/>
+                            Margin="4,0,0,0"
+                            ToolTip="开机自动启动（不需要管理员）。点「保存」后生效"/>
                   <CheckBox x:Name="chkTrayMode" Content="托盘模式" FontSize="12"
                             Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
-                            Margin="10,0,0,0" Click="TrayMode_Click"
-                            ToolTip="不显示桌面悬浮球，只在托盘里画一个占用率圆环；球右键菜单里也能切"/>
+                            Margin="10,0,0,0"
+                            ToolTip="不显示桌面球，只在托盘显示占用率圆环。点「保存」后生效"/>
                   <CheckBox x:Name="chkLite" Content="轻量模式" FontSize="12"
                             Foreground="{StaticResource Ink}" VerticalAlignment="Center" Cursor="Hand"
-                            Margin="10,0,0,0" Click="Lite_Click"
-                            ToolTip="省常驻内存与 CPU：不画粒子团/辉光/点纹理（球与面板都只留环+数字）、球静止时不再逐帧重画（那部分实测 50 MB / 12% 单核），托盘轮询放宽到 3 秒，采集端只在面板要用时才采进程/显卡/磁盘"/>
+                            Margin="10,0,0,0"
+                            ToolTip="省内存与 CPU：球面更素净，静止时不再持续重画。点「保存」后生效（会重启一次）"/>
                   <Button x:Name="BtnSaveSet" Content="保存" Style="{StaticResource ActBtn}" Height="24"
-                          Padding="12,0" Margin="6,0,0,0" Click="SaveSettings_Click"/>
+                          Padding="12,0" Margin="6,0,0,0" Click="SaveSettings_Click"
+                          ToolTip="「显示设置」里的改动都在这里生效"/>
                   <Button x:Name="BtnResetSet" Content="恢复默认" Style="{StaticResource GhostBtn}"
-                          Height="24" Padding="10,0" Margin="6,0,0,0" Click="ResetSettings_Click"/>
+                          Height="24" Padding="10,0" Margin="6,0,0,0" Click="ResetSettings_Click"
+                          ToolTip="填成出厂值，需再点「保存」才生效"/>
                 </WrapPanel>
               </StackPanel>
             </Border>

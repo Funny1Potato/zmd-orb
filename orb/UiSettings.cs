@@ -49,6 +49,21 @@ static class UiSettings
     /// 而内存占用率的整数显示本来十几秒才跳一次，1 秒的粒度是白花的。</summary>
     public static double BallPollSecs => Lite ? Math.Max(3.0, PollSecs) : PollSecs;
 
+    /// <summary>球上次被拖到的位置（**物理像素**的屏幕坐标）。int.MinValue = 还没拖过，
+    /// 那时按 XAML 里的出厂位置开局。存物理像素是因为拖拽全程就在物理像素里算
+    /// （Left/Top 是 DIP，125% 缩放下混算会漂），回来直接还回去最准。</summary>
+    public static int BallX { get; set; } = int.MinValue;
+    public static int BallY { get; set; } = int.MinValue;
+
+    /// <summary>记住球的位置并落盘（拖拽松手时调一次）：重启（切轻量、开机自启、手动重开）
+    /// 之后回到原地，不再跳回出厂位置。</summary>
+    public static void SaveBallPos(int x, int y)
+    {
+        BallX = x;
+        BallY = y;
+        Save();
+    }
+
     /// <summary>渲染方式开关："auto" | "on" | "off"。
     /// auto = **普通模式走硬件渲染、轻量模式走软件渲染**（这就是默认）。
     /// 软件渲染实测能把那口按轮询次数灌起来的写合并池直接归 0（稳态私有 123 → 67 MB），
@@ -69,6 +84,11 @@ static class UiSettings
         public string mode { get; set; } = "ball";
         public bool tray_promoted { get; set; }
         public bool lite { get; set; }
+        // 球被拖到的位置（物理像素）。**用 int? 而不是 int**：这个键可能是 null（手改过、
+        // 或早期版本没写过），而非可空 int 读到 null 会抛异常 → 整个 Load 失败 →
+        // 其它设置一起被默认值覆盖、下次 Save 就坐实了。新增的键一律照这条办
+        public int? ball_x { get; set; }
+        public int? ball_y { get; set; }
         // 用 JsonElement 接：这个键历史上是 bool（true/false），现在是 string（auto/on/off），
         // 直接声明成 string 会在读到老配置时抛异常、整个 Load 一起失败（其它设置全丢）
         public JsonElement? swrender { get; set; }
@@ -88,11 +108,22 @@ static class UiSettings
             Mode = d.mode == "tray" ? "tray" : "ball";
             TrayPromoted = d.tray_promoted;
             Lite = d.lite;
+            BallX = d.ball_x ?? int.MinValue;      // 没写过/写成 null 都算"没拖过"
+            BallY = d.ball_y ?? int.MinValue;
             SwMode = NormSw(d.swrender);
         }
         catch (Exception e)
         {
-            Diag.Log("读显示设置失败：" + e.Message);
+            /* 一个键的坏值（null、类型变了）会让整份反序列化失败 —— 于是所有设置退回默认值，
+               而且下次 Save（SetMode 启动时就会调）就把文件坐实成默认值，用户原来的设置无声消失。
+               这里至少先把原文件备份一份，并写清楚日志；新增键一律用容错的类型（JsonElement?/int?）。 */
+            Diag.Log("读显示设置失败（按默认值继续）：" + e.Message);
+            try
+            {
+                File.Copy(Path, Path + ".bad", true);
+                Diag.Log("原文件已备份成 " + System.IO.Path.GetFileName(Path) + ".bad");
+            }
+            catch { }
         }
     }
 
@@ -127,6 +158,8 @@ static class UiSettings
                     mode = Mode,
                     tray_promoted = TrayPromoted,
                     lite = Lite,
+                    ball_x = BallX,
+                    ball_y = BallY,
                     swrender = JsonSerializer.SerializeToElement(SwMode),
                 },
                 new JsonSerializerOptions { WriteIndented = true }));

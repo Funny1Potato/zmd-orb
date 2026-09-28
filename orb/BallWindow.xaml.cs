@@ -82,15 +82,6 @@ public partial class BallWindow : Window
         else CompositionTarget.Rendering -= OnFrame;
     }
 
-    /// <summary>面板上勾/取消"轻量模式"时立刻生效。</summary>
-    public void SetLite(bool lite)
-    {
-        SyncFrames();
-        Visual.InvalidateVisual();   // 粒子团/辉光是从"画不画"上关的，得让球重画一次才看得出来
-        Diag.Log(lite ? "球：轻量模式开（不画粒子团/辉光，静止时不逐帧重画）"
-                      : "球：轻量模式关，粒子团/辉光与常驻动画都回来");
-    }
-
     void Ball_IsVisibleChanged()
     {
         // 藏起来（托盘模式）就别轮询、也别逐帧重画了：托盘自己那份轮询照旧，
@@ -110,13 +101,16 @@ public partial class BallWindow : Window
         base.OnSourceInitialized(e);
         var h = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         Win32.HideFromTaskbar(h);
-        // 起始位置（XAML 里的 1200,220）在小屏幕或改过缩放后可能落到屏外，开局先夹一次
+        // 开局位置：优先用**上次拖到的位置**（物理像素，见 UiSettings.SaveBallPos），
+        // 没拖过才用 XAML 的出厂位置（1200,220）——它在小屏幕/改过缩放后可能落到屏外，所以统一夹一次
         if (Win32.GetWindowRect(h, out var r))
         {
             int beforeX = r.Left, beforeY = r.Top;
-            MoveClamped(r.Left, r.Top);
+            bool saved = UiSettings.BallX != int.MinValue && UiSettings.BallY != int.MinValue;
+            MoveClamped(saved ? UiSettings.BallX : r.Left, saved ? UiSettings.BallY : r.Top);
             if (Win32.GetWindowRect(h, out var r2) && (r2.Left != beforeX || r2.Top != beforeY))
-                Diag.Log($"球起始位置被夹回屏内：({beforeX},{beforeY}) → ({r2.Left},{r2.Top})");
+                Diag.Log($"球起始位置：({beforeX},{beforeY}) → ({r2.Left},{r2.Top})"
+                         + (saved ? "（上次记住的位置；夹过就是出屏了）" : "（出厂位置被夹回屏内）"));
         }
     }
 
@@ -404,6 +398,12 @@ public partial class BallWindow : Window
             Cursor = null;
             _hover = Stage.IsMouseOver;
             if (!_busy) ScaleTo(_hover ? 1.05 : 1, 160);
+            // 记住这次拖到哪（物理像素）：重启（切轻量、开机自启、手动重开）之后回到原地
+            if (Win32.GetWindowRect(new System.Windows.Interop.WindowInteropHelper(this).Handle, out var r))
+            {
+                UiSettings.SaveBallPos(r.Left, r.Top);
+                Diag.Log($"球位置已记住：({r.Left},{r.Top})");
+            }
         }
         else
         {
@@ -419,10 +419,10 @@ public partial class BallWindow : Window
 
     void Menu_Lite(object sender, RoutedEventArgs e)
     {
-        // IsCheckable 的菜单项，WPF 在 Click 之前已经把 IsChecked 翻好了 —— 直接信它
+        // IsCheckable 的菜单项，WPF 在 Click 之前已经把 IsChecked 翻好了 —— 直接信它。
+        // 勾上或取消都会重启一次（ToggleLite → RestartApp），理由见 App.ToggleLite。
         bool want = miLite.IsChecked;
-        (Application.Current as App)?.SetLite(want);
-        Diag.Log($"球菜单：轻量模式 → {(want ? "开" : "关")}");
+        (Application.Current as App)?.ToggleLite(want);
     }
 
     /// <summary>菜单弹出前把勾对齐当前设置（面板里、托盘菜单里都能改它，这里不能各说各话）。</summary>

@@ -88,11 +88,12 @@ sealed class TrayIcon : IDisposable
         _menu.Items.Add(Item("打开面板", () => _openPanel()));
         _menu.Items.Add(Item("轻度整理（免提权）", () => _clean()));
         _menu.Items.Add(new ToolStripSeparator());
-        // 轻量模式：勾选状态在菜单弹出前对齐当前设置（面板勾选框与球菜单改的都是同一个值）
+        // 轻量模式：勾选状态在菜单弹出前对齐当前设置（面板勾选框与球菜单改的都是同一个值）；
+        // 勾上或取消都会"写设置 + 重启一次"（App.ToggleLite），因为省的那笔内存靠软件渲染
         _lite = new ToolStripMenuItem("轻量模式")
         {
             CheckOnClick = true,
-            ToolTipText = "省常驻内存与 CPU：不画粒子团/辉光/点纹理（只留环+数字）、球静止时不再逐帧重画，采集端只在面板要用时才采进程/显卡",
+            ToolTipText = "省内存与 CPU：球面更素净，静止时不再持续重画。勾上或取消都会重启一次才生效",
         };
         _lite.Click += (_, _) => _setLite(_lite.Checked);
         _menu.Items.Add(_lite);

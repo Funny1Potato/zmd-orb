@@ -30,6 +30,8 @@ public partial class PanelWindow : Window
     double _maxOcc = UiSettings.DefaultMaxOccMb, _commitLimitMb = 32768; // 综合占用的分母：100% 对应的 MB
     int _page;
     bool _polling, _quitting, _cleaning, _autoBusy, _appsHidden, _snapLogged;
+    bool _settingsTouched;      // "显示设置"里有未保存的改动：这时候别用轮询回填把用户填的东西冲掉
+    bool _filling;              // 正在程序化回填：这期间控件事件不算"用户改动"
     int _snapCount;
     long _lastFrame;
 
@@ -59,6 +61,14 @@ public partial class PanelWindow : Window
     {
         InitializeComponent();
         UiSettings.Load();
+        // "显示设置"是一张**表单**：输入框与三个勾选框都只改界面，点「保存」才一起生效
+        // （轻量那条会顺带重启，见 SaveSettings_Click）。谁被用户动过就置 _settingsTouched，
+        // 之后 1 秒一次的轮询不再回填，免得把用户填的东西冲掉。
+        foreach (var b in new[] { setMaxOcc, setWCpu, setWMem, setPoll,
+                                  setAppLimit, setThreshold, setCheck, setGap })
+            b.TextChanged += (_, _) => Settings_Edited();
+        foreach (var c in new[] { chkAutostart, chkTrayMode, chkLite })
+            c.Click += (_, _) => Settings_Edited();
         _poll.Interval = TimeSpan.FromSeconds(UiSettings.PollSecs);
         _poll.Tick += (_, _) => Poll();
         _tick.Tick += (_, _) => TickUi();
@@ -243,49 +253,49 @@ public partial class PanelWindow : Window
         adminHint.Text = s.Admin ? "当前已是管理员：三档都不弹 UAC"
                                  : "深度/全部整理要管理员，点了会弹一次 UAC";
 
-        // 显示设置回填（正在编辑的框不动，免得 1 秒一次轮询把输入吃掉）
-        Prefill(setMaxOcc, UiSettings.MaxOccMb > 0 ? UiSettings.MaxOccMb : _commitLimitMb);
-        Prefill(setWCpu, UiSettings.WCpu, "0.##");
-        Prefill(setWMem, UiSettings.WMem, "0.##");
-        Prefill(setPoll, UiSettings.PollSecs, "0.##");
-        Prefill(setAppLimit, s.AutoAppLimit);
-        Prefill(setThreshold, s.AutoThresholdMb);
-        Prefill(setCheck, s.AutoCheckSecs);
-        Prefill(setGap, s.AutoMinGapSecs);
-        // 两个开关反映真实状态（自启看注册表，托盘模式看壳当前形态）
-        bool auto = Autostart.IsEnabled;
-        if (chkAutostart.IsChecked != auto) chkAutostart.IsChecked = auto;
-        bool tray = (Application.Current as App)?.Mode == "tray";
-        if (chkTrayMode.IsChecked != tray) chkTrayMode.IsChecked = tray;
-        if (chkLite.IsChecked != UiSettings.Lite) chkLite.IsChecked = UiSettings.Lite;
-    }
-
-    static void Prefill(TextBox box, double value, string fmt = "F0")
-    {
-        if (!box.IsFocused && value > 0) box.Text = value.ToString(fmt);
-    }
-
-    /* ---- 开机自启 / 托盘模式（M4：两个开关，点了立刻生效，不跟"保存"按钮绑一起） ---- */
-
-    void Autostart_Click(object sender, RoutedEventArgs e)
-    {
-        bool want = chkAutostart.IsChecked == true;
-        bool ok = want ? Autostart.Enable() : Autostart.Disable();
-        if (!ok)
+        // 显示设置回填（只有用户还没动过这张表单时才回填：1 秒一次的轮询不能把填的东西吃掉）
+        if (!_settingsTouched)
         {
-            chkAutostart.IsChecked = !want;
-            setHint.Text = "开机自启没设置上（看日志）";
-            return;
+            Prefill(setMaxOcc, UiSettings.MaxOccMb > 0 ? UiSettings.MaxOccMb : _commitLimitMb);
+            Prefill(setWCpu, UiSettings.WCpu, "0.##");
+            Prefill(setWMem, UiSettings.WMem, "0.##");
+            Prefill(setPoll, UiSettings.PollSecs, "0.##");
+            Prefill(setAppLimit, s.AutoAppLimit);
+            Prefill(setThreshold, s.AutoThresholdMb);
+            Prefill(setCheck, s.AutoCheckSecs);
+            Prefill(setGap, s.AutoMinGapSecs);
+            // 三个开关反映已保存的状态（自启看注册表，托盘模式看壳当前形态，轻量看 ui.json）
+            bool auto = Autostart.IsEnabled;
+            if (chkAutostart.IsChecked != auto) chkAutostart.IsChecked = auto;
+            bool tray = (Application.Current as App)?.Mode == "tray";
+            if (chkTrayMode.IsChecked != tray) chkTrayMode.IsChecked = tray;
+            if (chkLite.IsChecked != UiSettings.Lite) chkLite.IsChecked = UiSettings.Lite;
         }
-        setHint.Text = want ? "已设为开机自启" : "已取消开机自启";
     }
 
-    void TrayMode_Click(object sender, RoutedEventArgs e)
+    /// <summary>"显示设置"里有控件被**用户**动过：标记成"未保存"，轮询不再回填。
+    /// 程序化写入（Prefill）期间的事件不算 —— 用 _filling 挡掉。</summary>
+    void Settings_Edited()
     {
-        bool want = chkTrayMode.IsChecked == true;
-        (Application.Current as App)?.SetMode(want ? "tray" : "ball");
-        setHint.Text = want ? "已切到托盘模式" : "已切回桌面悬浮球";
+        if (_filling) return;
+        _settingsTouched = true;
+        setHint.Text = "改动会在点「保存」后生效";
     }
+
+    /// <summary>回填设置框。**程序化写入期间 TextChanged 不算用户改动**（见 Settings_Edited），
+    /// 聚焦中不覆盖（用户正在编辑），值没变就不写（省掉一次事件）。</summary>
+    void Prefill(TextBox box, double value, string fmt = "F0")
+    {
+        if (box.IsFocused || value <= 0) return;
+        string s = value.ToString(fmt);
+        if (box.Text == s) return;
+        _filling = true;
+        try { box.Text = s; }
+        finally { _filling = false; }
+    }
+
+    /* ---- 整理与系统信息那一页的开关与按钮各管各的（自动整理那条见 Auto_Click），
+       而"显示设置"那一整张表单 —— 输入框与三个勾选框 —— 只由「保存」按钮统一生效 ---- */
 
     /// <summary>收起面板交给 App 处理（App 会把实例置空并释放整棵树）。</summary>
     public int Page => _page;
@@ -307,28 +317,11 @@ public partial class PanelWindow : Window
         Close();
     }
 
-    /// <summary>轻量模式开关改了之后让页面重画一次：粒子团/辉光是"画不画"上关的，
-    /// 不主动重画的话，上一次带辉光的画面会一直留在屏幕上（轮询的取值守卫不会碰它）。</summary>
-    public void RefreshVisuals()
-    {
-        gauge.InvalidateVisual();
-        blob.InvalidateVisual();
-    }
-
-    /* ---- 轻量模式：不画粒子团与辉光 + 球静止时不逐帧重画 + 托盘轮询放宽 + 采集按需（勾了立刻生效） ---- */
-
-    void Lite_Click(object sender, RoutedEventArgs e)
-    {
-        bool want = chkLite.IsChecked == true;
-        (Application.Current as App)?.SetLite(want);      // 落盘 + 立刻生效（球/托盘两个右键菜单也走同一条路）
-        // 渲染方式跟着模式变（普通=硬件、轻量=软件），但它只能启动时定 —— 得提醒一句
-        bool needRestart = (Application.Current as App)?.SwApplied != UiSettings.SwRender;
-        setHint.Text = (want ? "已开轻量模式（球静止时不再重画）" : "已关轻量模式")
-                     + (needRestart ? $"；渲染要重启才切成{(UiSettings.SwRender ? "软件" : "硬件")}" : "");
-        Poll();                       // 立刻按新设置重排一次（面板这边主要在下一轮生效）
-    }
-
-    /* ---- 显示设置：综合分母 / 两项权重 / 刷新间隔（壳侧落盘）+ 自动整理三项与列表条数（采集端落盘） ---- */
+    /* ---- 显示设置：一整张"填表" —— 综合分母 / 两项权重 / 刷新间隔 / 开机自启 / 托盘模式 / 轻量模式
+       都在点「保存」时一起生效；勾选框点了只改界面（`Settings_Edited` 标一下"有未保存改动"）。
+       轻量模式比较特殊：它省的那笔内存靠切到软件渲染，而渲染方式只能在建窗口之前定（App.OnStartup），
+       在跑的实例里切只停逐帧重画、不还那口写合并池（实测常驻 53.8 MB 一动不动）——
+       所以保存时如果轻量状态变了，就写设置并**重启一次**（见 SaveSettings_Click 末尾）。 ---- */
 
     async void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
@@ -345,27 +338,52 @@ public partial class PanelWindow : Window
         if (wCpu + wMem > 0) { UiSettings.WCpu = wCpu; UiSettings.WMem = wMem; }   // 全 0 就保持原值
         UiSettings.PollSecs = Math.Min(10, Math.Max(0.3, poll));
         UiSettings.Save();
-        (Application.Current as App)?.ApplyPollSecs();      // 球也一起改（以前只改面板）
+        var app = Application.Current as App;
+        app?.ApplyPollSecs();                               // 球也一起改（以前只改面板）
 
         var a = await MemoryApi.SetAutoAsync(null, threshold, check, gap, Math.Max(1, appLimit));
-        setHint.Text = a == null ? "采集端那边的设置没保存上" : "已保存";
+
+        /* 三个勾选框也在这里生效（以前是点了立刻生效）。开机自启看注册表、托盘模式看当前形态、
+           轻量模式看 ui.json —— 只有"跟当前状态不一样"才动手。 */
+        string note = "";
+        bool wantAuto = chkAutostart.IsChecked == true;
+        if (wantAuto != Autostart.IsEnabled)
+        {
+            bool ok = wantAuto ? Autostart.Enable() : Autostart.Disable();
+            if (ok) note += "；开机自启" + (wantAuto ? "已开" : "已关");
+            else { chkAutostart.IsChecked = !wantAuto; note += "；开机自启没设置上（看日志）"; }
+        }
+        bool wantTray = chkTrayMode.IsChecked == true;
+        if (app != null && wantTray != (app.Mode == "tray"))
+        {
+            app.SetMode(wantTray ? "tray" : "ball");
+            note += wantTray ? "；已切到托盘模式" : "；已切回桌面悬浮球";
+        }
+        bool wantLite = chkLite.IsChecked == true;
+        _settingsTouched = false;                           // 表单提交了，之后允许轮询回填
+        setHint.Text = (a == null ? "采集端那边的设置没保存上" : "已保存") + note;
         Diag.Log($"面板：显示设置 综合分母={UiSettings.MaxOccMb:F0}MB（0=跟随提交上限{_commitLimitMb:F0}）"
                  + $" 权重 CPU={UiSettings.WCpu:0.##} 内存={UiSettings.WMem:0.##}"
                  + $" 刷新={UiSettings.PollSecs:0.##}s 应用概况={appLimit}条 阈值={threshold}MB "
-                 + $"检查={check}s 最小间隔={gap}s → 综合={Combined():F1}%");
+                 + $"检查={check}s 最小间隔={gap}s → 综合={Combined():F1}%"
+                 + $"；自启={wantAuto} 托盘={wantTray} 轻量={wantLite}");
+
+        if (wantLite != UiSettings.Lite)
+        {
+            // 轻量状态变了 → 渲染方式跟着变 → 只能重启。重启要 ~1 秒，这一行是给这段空档用的
+            // （面板重启前还开着：RestartApp 会带 --panel 把它带回来）
+            setHint.Text = "已保存，正在重启…";
+            app?.ToggleLite(wantLite);                      // 写设置 + 重启自己
+            return;                                         // 已经开始重启了，别再往下动界面
+        }
         Poll();
     }
 
-    async void ResetSettings_Click(object sender, RoutedEventArgs e)
+    void ResetSettings_Click(object sender, RoutedEventArgs e)
     {
-        UiSettings.MaxOccMb = UiSettings.DefaultMaxOccMb;    // 分母出厂值 325799
-        UiSettings.WCpu = 0.4;
-        UiSettings.WMem = 0.6;
-        UiSettings.PollSecs = 1.0;
-        UiSettings.Save();
-        (Application.Current as App)?.ApplyPollSecs();      // 球也一起改
-        await MemoryApi.SetAutoAsync(null, 2048, 60, 180, 40);
-        setMaxOcc.Text = UiSettings.DefaultMaxOccMb.ToString("F0");
+        // 和别的设置一样：只把**界面**填成出厂值，点「保存」才生效
+        _settingsTouched = true;
+        setMaxOcc.Text = UiSettings.DefaultMaxOccMb.ToString("F0");    // 分母出厂值 325799
         setWCpu.Text = "0.4";
         setWMem.Text = "0.6";
         setPoll.Text = "1";
@@ -373,9 +391,7 @@ public partial class PanelWindow : Window
         setThreshold.Text = "2048";
         setCheck.Text = "60";
         setGap.Text = "180";
-        setHint.Text = "已恢复默认";
-        Diag.Log("面板：显示设置恢复默认");
-        Poll();
+        setHint.Text = "已填入出厂值，点「保存」生效";
     }
 
     static double Parse(TextBox box, double fallback) =>

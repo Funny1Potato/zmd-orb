@@ -19,6 +19,7 @@ public partial class App : Application
     Mutex? _mutex;
     EventWaitHandle? _showEvent;
     bool _trayBusy;
+    bool _restarting;            // 正在重启：挡住重复点击（重启要 ~1 秒，期间菜单还能点）
 
     // 单实例用的名字：第二次启动只负责"通知已有实例打开面板"，自己立刻退出
     const string MutexName = @"Local\zmd-orb-single";
@@ -26,10 +27,6 @@ public partial class App : Application
 
     /// <summary>当前形态：ball = 桌面悬浮球（默认）；tray = 只在托盘画占用率圆环。</summary>
     public string Mode { get; private set; } = "ball";
-
-    /// <summary>本次进程**实际生效**的渲染方式。切换轻量模式会改变"该用哪个"，
-    /// 但渲染模式只能在启动时定 —— 面板据此提醒"要重启才切换"。</summary>
-    public bool SwApplied { get; private set; }
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -70,6 +67,17 @@ public partial class App : Application
             return;
         }
 
+        /* 重启自己时用的两个参数（界面上的轻量开关走这条路，见 RestartApp）：
+           --wait-pid N 等旧实例退出后再拉采集端；--panel 把面板也带回来（它是懒构造的）。 */
+        bool wantPanel = false;
+        int waitPid = 0;
+        for (int i = 0; i < e.Args.Length; i++)
+        {
+            if (e.Args[i] == "--panel") wantPanel = true;
+            else if (e.Args[i] == "--wait-pid" && i + 1 < e.Args.Length)
+                int.TryParse(e.Args[i + 1], out waitPid);
+        }
+
         /* 单实例：没有这层保护时双击两次 exe 会出现两个球、两个采集端抢 8910。
            第二个实例把"打开面板"的信号发给第一个（命名事件），然后自己退出。 */
         _mutex = new Mutex(true, MutexName, out bool first);
@@ -97,17 +105,18 @@ public partial class App : Application
             }
         });
 
+        if (waitPid > 0) WaitOldInstance(waitPid);
         _backend = BackendProcess.Start();
 
         // 软件渲染必须在**建窗口之前**定下来（换渲染模式会让 WPF 重建显示上下文）。
         // 默认 auto：普通模式走硬件（面板跟手），轻量模式走软件（实测写合并池从 48 MB 直接归 0）。
+        // 也正因为"必须在建窗口之前"，界面上的轻量开关只能靠重启生效 —— 见 ToggleLite。
         if (UiSettings.SwRender)
             System.Windows.Media.RenderOptions.ProcessRenderMode =
                 System.Windows.Interop.RenderMode.SoftwareOnly;
         Diag.Log($"渲染：{(UiSettings.SwRender ? "软件（SoftwareOnly）" : "硬件")}"
                  + $"（开关 {UiSettings.SwMode}，形态 {UiSettings.Mode}；设备 Tier="
                  + $"{System.Windows.Media.RenderCapability.Tier >> 16}）");
-        SwApplied = UiSettings.SwRender;
         _ball = new BallWindow();
         // 面板不在这里构造：那棵视觉树（四页 + 六张卡 + 走势图）不打开就不该占内存，见 OpenPanel()
 
@@ -116,6 +125,25 @@ public partial class App : Application
         for (int i = 0; i + 1 < e.Args.Length; i++)
             if (e.Args[i] == "--mode") mode = e.Args[i + 1];
         SetMode(mode);
+
+        if (wantPanel) OpenPanel();     // --panel：重启前开着面板的话，重启后接着开着
+    }
+
+    /// <summary>重启时等旧实例真正退出再继续。不等的话，新实例可能在旧实例回收采集端（taskkill）
+    /// 之前就探到 /health 可用 → 把它复用下来，紧接着被旧实例杀掉 → 新实例就没采集端了。</summary>
+    static void WaitOldInstance(int pid)
+    {
+        try
+        {
+            using var old = Process.GetProcessById(pid);
+            bool done = old.WaitForExit(8000);
+            Diag.Log($"等旧实例 pid={pid}：{(done ? "已退出" : "超时 8 秒（继续）")}");
+        }
+        catch (Exception ex)
+        {
+            // 已经退掉了就没有这个 id —— 正常情况
+            Diag.Log($"等旧实例 pid={pid}：" + ex.Message);
+        }
     }
 
     /// <summary>切换形态：ball = 桌面悬浮球；tray = 收起球、只在托盘显示占用率圆环。落盘记住。</summary>
@@ -131,7 +159,7 @@ public partial class App : Application
             _ball?.Hide();
             if (_tray == null)
             {
-                _tray = new TrayIcon(OpenPanel, CleanNow, () => SetMode("ball"), QuitApp, SetLite);
+                _tray = new TrayIcon(OpenPanel, CleanNow, () => SetMode("ball"), QuitApp, ToggleLite);
                 // 轻量模式放宽到 3 秒：托盘图标本来就是"取整变了才重画"，1 秒一次没必要
                 _trayPoll = new DispatcherTimer
                 {
@@ -196,23 +224,53 @@ public partial class App : Application
         }
     }
 
-    /// <summary>轻量模式开关（面板的勾选框、两个右键菜单都走这里）：落盘 + 立刻生效，不用重启。</summary>
-    public void SetLite(bool on)
+    /// <summary>轻量模式的界面开关（面板勾选框 + 球与托盘两个菜单的勾）：写设置后**立刻重启一次**。
+    /// 轻量模式省的那笔内存靠的是切到软件渲染，而 `RenderOptions.ProcessRenderMode` 必须在
+    /// 建窗口之前设（见 OnStartup）——在跑的实例里改只停逐帧重画、**不还那口写合并池**
+    /// （实测常驻 53.8 MB、到水位后一动不动，重启才归 0）。所以别做"勾一下当场生效"的假象，
+    /// 直接重启，行为可预期。命令行 `--lite on|off` 仍是"只写设置"，给脚本/安装包用。</summary>
+    public void ToggleLite(bool on)
     {
         UiSettings.Lite = on;
         UiSettings.Save();
-        ApplyLite();
+        Diag.Log($"*** 轻量模式 = {(on ? "开" : "关")}（重启以生效）");
+        RestartApp();
     }
 
-    /// <summary>轻量模式的实际生效：球那边决定要不要逐帧重画，托盘轮询跟着放宽/收紧。</summary>
-    public void ApplyLite()
+    /// <summary>重启自己。顺序很重要：**先把单实例的互斥体松开**，否则新实例会走"已有实例在跑"
+    /// 那条路 —— 只给旧实例发个通知然后自己退出，看着像点了没反应。
+    /// 新实例还会等本进程真正退出（`--wait-pid`）再拉采集端，理由见 WaitOldInstance。</summary>
+    void RestartApp()
     {
-        bool lite = UiSettings.Lite;
-        _ball?.SetLite(lite);
-        _ball?.ApplyPollSecs();          // 轻量模式下球的轮询也放宽（见 UiSettings.BallPollSecs）
-        _panel?.RefreshVisuals();        // 面板开着时也得重画一次（辉光/粒子是"画不画"上关的）
-        if (_trayPoll != null) _trayPoll.Interval = TimeSpan.FromSeconds(lite ? 3 : 1);
-        Diag.Log($"*** 轻量模式 = {(lite ? "开（不画粒子团/辉光，球静止不重画，采集按需）" : "关")}");
+        if (_restarting) { Diag.Log("重启：已经在重启了，忽略这次点击"); return; }
+        _restarting = true;
+        string exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+        if (exe.Length == 0)
+        {
+            Diag.Log("重启失败：拿不到自身路径");
+            _restarting = false;
+            return;
+        }
+        string args = $"--wait-pid {Environment.ProcessId} --mode {Mode}"
+                    + (_panel is { IsVisible: true } ? " --panel" : "");
+        _mutex?.Dispose();                                // 松绳
+        _mutex = null;
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe, args)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = AppContext.BaseDirectory,
+            });
+            Diag.Log($"重启：已起新进程 {exe} {args}");
+        }
+        catch (Exception ex)
+        {
+            Diag.Log("重启失败：" + ex.Message);
+            _restarting = false;
+            return;
+        }
+        QuitApp();
     }
 
     /// <summary>刷新间隔改了之后同时应用到球与面板（这个设置以前只对面板生效）。</summary>
