@@ -88,9 +88,11 @@ zmd-orb.exe --autostart on|off     改开机自启
 
 ## 设计参考与许可
 
-界面与部分功能设计参考了 [zmd-manager（终末地管理器）](https://github.com/QinAnze/zmd-manager)。
+界面与部分功能设计参考了 [zmd-manager（终末地管理器）](https://github.com/QinAnze/zmd-manager)；
+本项目的部分构建脚本与前端视觉实现也源自该项目（其作者保留权利）。
 
-本项目以 **MIT 许可**发布，见 [LICENSE](LICENSE)。
+本项目自身以 **MIT 许可**发布，见 [LICENSE](LICENSE)；第三方出处与许可状态见
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 开发者
 
