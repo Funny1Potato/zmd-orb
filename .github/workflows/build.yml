@@ -54,6 +54,11 @@ jobs:
       - name: Publish shell (self-contained win-x64)
         run: dotnet publish orb/ZmdOrb.csproj -c Release -r win-x64 --self-contained true
 
+      # 许可与说明也进发布目录：压缩包是整目录打包，安装包的 [Files] 也指同一个目录
+      # （MIT 要求把版权声明随副本一起给；安装包那边的源缺失时有 skipifsourcedoesntexist 兜着）
+      - name: Stage LICENSE and README into the publish dir
+        run: cp LICENSE README.md "$PUB/"
+
       # 真跑一次发布产物，确认它能把 backend.exe 拉起来并开始出数
       - name: Smoke test published bundle
         run: |

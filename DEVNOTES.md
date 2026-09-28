@@ -18,8 +18,17 @@
 （终末地管理器，<https://github.com/QinAnze/zmd-manager>）——球面样式与配色对齐它的电量环。
 本项目以 MIT 发布，见 [LICENSE](LICENSE)。
 
-> 维护提示：与 zmd-manager 之间是**设计参考**这一层关系（照着它的观感重写的实现）；
-> 若日后要直接取用它的代码或素材，先核对其许可并在这里注明。
+> **出处与许可（2026-09-28 核对，别写成"只是设计参考"）**：本项目起步时**确实沿用了 zmd-manager 的代码**。
+> 实测证据：`build_exe.py` 两边只差 6 行；`make_icon.py` 差 30/11；`.github/workflows/build.yml` 差 64/40；
+> `collector/speed_collector.py` 与它的 `taskman_collector.py` 有 258 行共用（其余是后来扩出来的）；
+> 球面那组非通用色值（`#ffe23d` 进度弧 / `#ecb063` 左底环 / `#7fb2cc` 右底环）与"装饰弧 + 条纹"的结构
+> 在它 `frontend/index.html` 里就是同一套（那套观感本身源自《明日方舟：终末地》的协议核心电量面板）。
+>
+> 而 **zmd-manager 没有 LICENSE 文件**（默认"保留所有权利"）。所以：
+> - 若 `QinAnze/zmd-manager` 也是本项目作者自己的仓库 → 无冲突，把"沿用自 zmd-manager"在这条里写清楚即可；
+> - 若是别人的仓库 → **对外分发（尤其把本仓库转公开、按 MIT 发）前必须先取得作者同意**，
+>   或把它的版权与出处一并写进 `LICENSE` 与 `README`。
+> README 面向用户那句目前写的是"界面与部分功能设计参考了 zmd-manager"，措辞轻重由作者定。
 
 ## 形态与命令行
 

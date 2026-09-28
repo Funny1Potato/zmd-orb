@@ -56,6 +56,10 @@ Source: "{#MySourceDir}\{#MyExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourceDir}\backend.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MySourceDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#MySourceDir}\*.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; 许可与说明也随安装包一起发（MIT 要求把版权声明随副本一起给）。
+; skipifsourcedoesntexist：本地直接编译安装包时源目录里没有这两个文件也不报错。
+Source: "{#MySourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#MySourceDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyExeName}"
