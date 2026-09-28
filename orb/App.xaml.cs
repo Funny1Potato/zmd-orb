@@ -37,6 +37,15 @@ public partial class App : Application
            zmd-orb.exe --autostart on|off / --lite on|off —— 只改设置然后退出，脚本/安装包也能这么调。 */
         for (int i = 0; i + 1 < e.Args.Length; i++)
         {
+            if (e.Args[i] == "--swrender")
+            {
+                // 只在启动时生效：换渲染模式会让 WPF 重建显示上下文，运行中改不可靠
+                UiSettings.SwRender = e.Args[i + 1] == "on";
+                UiSettings.Save();
+                Diag.Log($"命令行：软件渲染 {(UiSettings.SwRender ? "on（下次启动生效）" : "off（下次启动生效）")}");
+                Shutdown();
+                return;
+            }
             if (e.Args[i] == "--lite")
             {
                 // 不能叫 on：外层（同一个 for 体）还有一个 bool on（CS0136）
@@ -83,6 +92,14 @@ public partial class App : Application
         });
 
         _backend = BackendProcess.Start();
+
+        // 软件渲染必须在**建窗口之前**定下来（换渲染模式会让 WPF 重建显示上下文）。
+        // 实测能把那口按轮询次数灌起来的写合并池压到 0（见 README"面板的内存"一节旁的说明）。
+        if (UiSettings.SwRender)
+            System.Windows.Media.RenderOptions.ProcessRenderMode =
+                System.Windows.Interop.RenderMode.SoftwareOnly;
+        Diag.Log($"渲染：{(UiSettings.SwRender ? "软件（SoftwareOnly）" : "硬件")} "
+                 + $"Tier={System.Windows.Media.RenderCapability.Tier >> 16}");
         _ball = new BallWindow();
         // 面板不在这里构造：那棵视觉树（四页 + 六张卡 + 走势图）不打开就不该占内存，见 OpenPanel()
 

@@ -49,6 +49,13 @@ static class UiSettings
     /// 而内存占用率的整数显示本来十几秒才跳一次，1 秒的粒度是白花的。</summary>
     public static double BallPollSecs => Lite ? Math.Max(3.0, PollSecs) : PollSecs;
 
+    /// <summary>软件渲染（`RenderOptions.ProcessRenderMode = SoftwareOnly`）——**默认开**。
+    /// 实测（本机、轻量开、球模式）：写合并池从 48 MB 直接归 0，稳态私有 123 → 67 MB；
+    /// 面板开着时私有 177 → 63 MB，代价是面板每秒刷新的 CPU 从 3.3% 到 7.5% 单核。
+    /// 只在**启动时**生效——换渲染模式会让 WPF 重建显示上下文，运行中改不可靠，所以改了要重启。
+    /// `ui.json` 里没这个键时按"开"处理（老配置不会意外退回硬件）。</summary>
+    public static bool SwRender { get; set; } = true;
+
     sealed class Dto
     {
         public double max_occ_mb { get; set; } = DefaultMaxOccMb;
@@ -58,6 +65,7 @@ static class UiSettings
         public string mode { get; set; } = "ball";
         public bool tray_promoted { get; set; }
         public bool lite { get; set; }
+        public bool? swrender { get; set; }      // 可空：老配置里没这个键 → 按默认（开）处理
     }
 
     public static void Load()
@@ -74,6 +82,7 @@ static class UiSettings
             Mode = d.mode == "tray" ? "tray" : "ball";
             TrayPromoted = d.tray_promoted;
             Lite = d.lite;
+            SwRender = d.swrender ?? true;      // 没写过这项的老配置 = 默认软件渲染
         }
         catch (Exception e)
         {
@@ -96,6 +105,7 @@ static class UiSettings
                     mode = Mode,
                     tray_promoted = TrayPromoted,
                     lite = Lite,
+                    swrender = SwRender,
                 },
                 new JsonSerializerOptions { WriteIndented = true }));
         }
